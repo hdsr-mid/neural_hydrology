@@ -1,0 +1,36 @@
+# Data bestanden - alleen voorbeelden uploaden
+data/time_series/*.nc
+!data/time_series/AFVG1.nc
+!data/time_series/AFVG13.nc
+!data/time_series/AFVG15.nc
+
+# Run resultaten en modellen
+runs/
+*.pt
+*.log
+
+# Python cache en temporary files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.DS_Store
+.vscode/
+.idea/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Large zip files
+*.zip
+
+# TensorBoard logs
+events.out.tfevents.*
+
+# Model checkpoints
+model_epoch*.pt
+
+# Logs
+log.txt 

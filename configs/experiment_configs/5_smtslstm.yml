@@ -1,0 +1,77 @@
+seed: 42
+batch_size: 256
+clip_gradient_norm: 1
+cache_validation_data: true
+clip_targets_to_zero: 
+- afvoer
+data_dir: data
+dataset: generic
+device: mps # of cpu
+dynamic_inputs:
+  - neerslag
+  - straling
+  - temperatuur
+  - verdamping
+  - streefpeil
+  - u
+  - v
+epochs: 5
+experiment_name: development_run
+head: regression
+hidden_size: 128
+initial_forget_bias: 3
+learning_rate:
+  0: 0.001
+log_interval: 5
+log_n_figures: 5
+log_tensorboard: true
+loss: RMSE
+metrics:
+- NSE
+- KGE
+- Alpha-NSE
+- Beta-NSE
+model: mtslstm
+optimizer: Adam
+output_activation: linear
+output_dropout: 0.2
+predict_last_n:
+  1D: 1
+  1h: 24
+save_train_data: false
+save_validation_results: true
+save_weights_every: 5
+seq_length:
+  1D: 365
+  1h: 336
+shared_mtslstm: true
+static_attributes:
+- maaiveldhoogte
+- maaiveldhoogte_iqr
+- water_percentage
+- stedelijk_percentage
+- oppervlak
+- stuw
+- maaiveldhoogte_p95_minus_p05
+- permabiliteit
+- klei
+- zand
+- veen
+target_noise_std: 0
+target_variables:
+- afvoer
+test_basin_file: hdsr_polders.txt
+test_end_date: 01/01/2023
+test_start_date: 01/01/2021
+train_basin_file: hdsr_polders.txt
+train_end_date: 01/01/2020
+train_start_date: 01/01/2014
+use_basin_id_encoding: false
+use_frequencies:
+- 1D
+- 1h
+validate_every: 5
+validate_n_random_basins: 41
+validation_basin_file: hdsr_polders.txt
+validation_end_date: 01/01/2021
+validation_start_date: 01/01/2020
