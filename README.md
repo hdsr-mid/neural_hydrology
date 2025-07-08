@@ -49,9 +49,8 @@ Elke variant heeft eigen configuratie bestanden in `configs/experiment_configs/`
 ## Belangrijkste scripts
 
 ### Training
-- `local_run_nh.py` - Hoofdscript voor lokale training runs
-- `batch_train_single.py` - Batch training voor meerdere experimenten
-- `run_model.py` - Basis model training script
+- `batch_train_single.py` - Batch training voor single LSTM model per afvoergebied
+- `run_model.py` - Basis model training script voor een of meerdere configuraties
 
 ### Analyse
 - `feature_optimalisatie.py` - Feature selectie en optimalisatie
@@ -74,10 +73,10 @@ pip install -e .
 
 ### Training
 ```bash
-# Train een model met een specifieke configuratie
-python scripts/training/local_run_nh.py --config configs/experiment_configs/1_mtslstm_emb.yml
+# Train een model met een specifieke configuraties
+python scripts/training/run_model.py
 
-# Batch training voor meerdere experimenten
+# Batch training voor single LSTM model per afvoergebied
 python scripts/training/batch_train_single.py
 ```
 
