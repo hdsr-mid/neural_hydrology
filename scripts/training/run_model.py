@@ -104,10 +104,8 @@ def run_neural_hydrology_model(config_name):
     
 # config_name_list = ["config_simulatie_1.yml", "config_simulatie_2.yml", "config_simulatie_3.yml", "config_simulatie_4.yml", "config_simulatie_5.yml"]
 # config_name_list = ["final_config.yml"]
-config_name_list = ["1_mtslstm_emb.yml", "2_mtslstm_emb_ohe.yml", "3_mtslstm.yml", "4_mtslstm_ohe.yml", 
-                    "5_smtslstm.yml", "6_smtslstm_emb.yml", "7_smtslstm_ohe.yml", "8_smtslstm_emb_ohe.yml", 
-                    "9_mtslstm_emb_stat.yml", "10_mtslstm_emb_dyn.yml"]
-
+config_name_list = [(Path(__file__).parent.parent.parent / "config.yml").resolve()]
+    
 # code om batch aan configs te draaien
 for config_name in config_name_list:
     print("start of run with config", config_name)

@@ -81,8 +81,8 @@ for polder in polders:
 
     try:
     # train model
-        config_path = "template_single_lstm.yml" 
-        start_run(config_file=Path(config_path))
+        config_path = Path(__file__).parent.parent.parent / "config.yml"
+        start_run(config_file=config_path)
 
         # evaluate model
         script_path = os.getcwd()

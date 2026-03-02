@@ -60,7 +60,7 @@ static_feature_klei_zand_veen = ['klei', 'zand', 'veen']
 # BIJ OPTUNA DASHBOARD (in de terminal, bij anaconda in de environment optuna-dashboard sqlite:///nh_2_study.db) DAT IS DAN NIET MOGELIJK!!!!!!!!!!!
 def objective(trial):
 
-    base_config = "config_simulatie_basis.yml"#, "config_simulatie_2.yml", "config_simulatie_3.yml", "config_simulatie_5.yml"]
+    base_config = Path(__file__).parent.parent.parent / "config.yml"  #, "config_simulatie_2.yml", "config_simulatie_3.yml", "config_simulatie_5.yml"]
     # load the yaml file manually using the yaml package
     with open(base_config) as file:
         config = yaml.load(file, Loader=yaml.FullLoader)
