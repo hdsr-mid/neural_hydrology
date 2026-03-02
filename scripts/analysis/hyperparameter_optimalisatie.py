@@ -36,9 +36,9 @@ def extract_tensorboard_scalars(logdir):
     
     return scalars
     
-base_config = "config_simulatie_1.yml"#, "config_simulatie_2.yml", "config_simulatie_3.yml", "config_simulatie_5.yml"]
+base_config = Path(__file__).parent.parent.parent / "config.yml"  #, "config_simulatie_2.yml", "config_simulatie_3.yml", "config_simulatie_5.yml"]
 # load the yaml file manually using the yaml package
-with open('config_simulatie_1.yml') as file:
+with open(base_config) as file:
     config = yaml.load(file, Loader=yaml.FullLoader)
 
 
