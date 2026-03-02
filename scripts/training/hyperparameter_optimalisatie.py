@@ -140,7 +140,7 @@ def objective(trial):
         ):
             mlflow.log_metric("val_nse_1d", float(loss_nse_1d), step=int(epoch_nse_1d))
             mlflow.log_metric("val_nse_1h", float(loss_nse_1h), step=int(epoch_nse_1h))
-            mlflow.log_metric("val_nse_1h_1d", (float(loss_nse_1d), float(loss_nse_1h))/2, step=int(epoch_nse_1h))
+            mlflow.log_metric("val_nse_1h_1d", (float(loss_nse_1d) + float(loss_nse_1h))/2, step=int(epoch_nse_1h))
 
 
         mlflow.log_params(trial.params)
