@@ -98,11 +98,6 @@ Alle experiment configuraties staan in `configs/experiment_configs/`. Elke confi
 - Data preprocessing
 - Output metrics
 
-Voorbeeld configuraties:
-- `1_mtslstm_emb.yml` - MTSLSTM met embeddings
-- `3_mtslstm.yml` - Basis MTSLSTM
-- `10_mtslstm_emb_dyn.yml` - Dynamische variant
-
 ## Resultaten
 
 De training resultaten worden opgeslagen in een `runs/` folder (niet meegeleverd vanwege grootte). Elke run bevat:
