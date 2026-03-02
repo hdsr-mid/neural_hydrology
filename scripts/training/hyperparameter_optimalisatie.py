@@ -14,7 +14,7 @@ import numpy as np
 runs_dir = "../../runs"
 # mlflow.set_tracking_uri("databricks")  # if running on Databricks this is often already configured
 mlflow.set_experiment("/Shared/hdsr_lstm_optuna")
-base_config = "config_simulatie_1.yml"#, "config_simulatie_2.yml", "config_simulatie_3.yml", "config_simulatie_5.yml"]
+base_config = "../../config.yml"#, "config_simulatie_2.yml", "config_simulatie_3.yml", "config_simulatie_5.yml"]
 
 def run_neural_hydrology_model(config_name):
     run_config = Config(Path(config_name))

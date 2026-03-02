@@ -86,7 +86,7 @@ test_basin_file: ../../data/hdsr_polders.txt
 test_end_date: 01/01/2023
 test_start_date: 01/01/2021
 train_basin_file: ../../data/hdsr_polders.txt
-train_end_date: 01/01/2020
+train_end_date: 01/01/2019
 train_start_date: 01/01/2014
 use_basin_id_encoding: false
 use_frequencies:
@@ -96,4 +96,4 @@ validate_every: 5
 validate_n_random_basins: 41
 validation_basin_file: ../../data/hdsr_polders.txt
 validation_end_date: 01/01/2021
-validation_start_date: 01/01/2020
+validation_start_date: 01/01/2019
