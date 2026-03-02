@@ -3,9 +3,9 @@ clip_gradient_norm: 1
 cache_validation_data: true
 clip_targets_to_zero: 
 - afvoer
-data_dir: data
+data_dir: ../../data
 dataset: generic
-device: mps # of cpu
+device: cuda:0 # of cpu
 dynamic_inputs:
   1D:
   - neerslag
@@ -82,10 +82,10 @@ statics_embedding:
 target_noise_std: 0
 target_variables:
 - afvoer
-test_basin_file: hdsr_polders.txt
+test_basin_file: ../../data/hdsr_polders.txt
 test_end_date: 01/01/2023
 test_start_date: 01/01/2021
-train_basin_file: hdsr_polders.txt
+train_basin_file: ../../data/hdsr_polders.txt
 train_end_date: 01/01/2020
 train_start_date: 01/01/2014
 use_basin_id_encoding: false
@@ -94,6 +94,6 @@ use_frequencies:
 - 1h
 validate_every: 5
 validate_n_random_basins: 41
-validation_basin_file: hdsr_polders.txt
+validation_basin_file: ../../data/hdsr_polders.txt
 validation_end_date: 01/01/2021
 validation_start_date: 01/01/2020
