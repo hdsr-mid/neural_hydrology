@@ -72,6 +72,7 @@ static_attributes:
 - klei
 - zand
 - veen
+- kwelmean
 statics_embedding:
   activation: tanh
   dropout: 0.2
