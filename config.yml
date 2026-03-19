@@ -73,6 +73,7 @@ static_attributes:
 - zand
 - veen
 - kwelmean
+- peil_range
 statics_embedding:
   activation: tanh
   dropout: 0.2
