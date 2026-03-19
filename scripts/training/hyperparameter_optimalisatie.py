@@ -18,7 +18,10 @@ import datetime
 EXPERIMENT_NAME = f"hdsr_lstm_optuna_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
 N_TRIALS = 5
 BASE_CONFIG = "../../config.yml" #, "config_simulatie_2.yml", "config_simulatie_3.yml", "config_simulatie_5.yml"]
-RUNS_DIR = "../../runs"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+RUNS_DIR = PROJECT_ROOT / "runs"
+RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
 mlflow.set_tracking_uri("databricks")  # if running on Databricks this is often already configured
 mlflow.set_experiment(f"/Shared/{EXPERIMENT_NAME}")
 
@@ -62,8 +65,12 @@ def objective(trial):
         experiment_name = config['experiment_name']
         experiment_name = experiment_name + '_' + str(trial.number)
         config['experiment_name'] = experiment_name
-        
+
+        config["run_dir"] = str(RUNS_DIR)
         config['hidden_size'] = 16 
+        config['train_start_date'] = '01/01/2017'
+        config['epochs'] = 20
+
 
         # dropout, also apply to the embedding networks
         dropout = trial.suggest_categorical('dropout', [0.1, 0.2, 0.3, 0.4])
@@ -161,7 +168,7 @@ def objective(trial):
 study = optuna.create_study(
     direction='maximize',
     study_name=EXPERIMENT_NAME,
-    storage=f'sqlite:///{EXPERIMENT_NAME}.db',
+    storage=f'sqlite:////local_disk0/tmp/{EXPERIMENT_NAME}.db',
     load_if_exists=True
 )
 
