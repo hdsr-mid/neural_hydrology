@@ -116,7 +116,7 @@ def objective(trial):
         mlflow.log_params(
             config
         )
-        mlflow.log_artifact(config_name, artifact_path="config")
+        mlflow.log_artifact(config_path, artifact_path="config")
 
         # Determine device mode
         gpu_available = torch.cuda.is_available() or torch.backends.mps.is_available()
@@ -124,7 +124,7 @@ def objective(trial):
         mlflow.set_tag("device_mode", device_mode)
 
         # draai het model met de nieuwe config
-        run_neural_hydrology_model(config_name)
+        run_neural_hydrology_model(config_path)
 
         # we assume the latest folder in the runs directory is of past training above
         folders_in_runs = [os.path.join(RUNS_DIR, folder) for folder in os.listdir(RUNS_DIR)]
