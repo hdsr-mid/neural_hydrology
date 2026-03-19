@@ -1,4 +1,3 @@
-import argparse
 import os
 import tempfile
 from pathlib import Path
@@ -12,55 +11,21 @@ from neuralhydrology.nh_run import start_run
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
 
-
-
-# NOTE: WIP NOT READY!!!!!!!!!
-
-
 os.environ["MLFLOW_TRACKING_URI"] = "databricks"
 
+
+# Notebook-style options: edit these values before running the file.
+PROJECT_ROOT = Path("/Workspace/Shared/neural_hydrology_fork")
+SOURCE_EXPERIMENT_NAME = "/Shared/hdsr_lstm_optuna_20260319_120530"
+SOURCE_TRIAL_NUMBER = 0
 SEEDS = [0, 1, 2, 3, 4]
-
-
-def get_project_root() -> Path:
-    if "__file__" in globals():
-        return Path(__file__).resolve().parents[2]
-
-    notebook_root = Path("/Workspace/Shared/neural_hydrology_fork")
-    if notebook_root.exists():
-        return notebook_root
-
-    return Path.cwd()
-
-
-PROJECT_ROOT = get_project_root()
-BASE_CONFIG = PROJECT_ROOT / "config.yml"
+OUTPUT_EXPERIMENT_NAME = f"{SOURCE_EXPERIMENT_NAME}_best_model"
 RUNS_DIR = PROJECT_ROOT / "runs"
 CONFIG_DIR = PROJECT_ROOT / "configs_best_model"
+
+
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Retrain one Optuna trial multiple times with different seeds."
-    )
-    parser.add_argument("--experiment-name", help="MLflow experiment name, with or without /Shared/ prefix.")
-    parser.add_argument("--trial-number", type=int, help="Optuna trial number to retrain.")
-    parser.add_argument(
-        "--seeds",
-        type=int,
-        nargs="+",
-        default=SEEDS,
-        help="List of seeds to retrain with. Defaults to 0 1 2 3 4.",
-    )
-    return parser.parse_args()
-
-
-def get_user_inputs(args: argparse.Namespace) -> tuple[str, int, list[int]]:
-    experiment_name = args.experiment_name or input("Experiment name: ").strip()
-    trial_number = args.trial_number if args.trial_number is not None else int(input("Trial number: ").strip())
-    return experiment_name, trial_number, args.seeds
 
 
 def normalize_experiment_name(experiment_name: str) -> str:
@@ -155,9 +120,9 @@ def log_validation_metrics(run_folder: Path) -> float:
     return max_validation_nse_score
 
 
-def train_repeat(source_experiment_name: str, trial_number: int, seed: int, base_config: dict) -> None:
+def train_repeat(source_experiment_basename: str, trial_number: int, seed: int, base_config: dict) -> None:
     config = dict(base_config)
-    repeat_experiment_name = f"{source_experiment_name}_trial_{trial_number}_seed_{seed}"
+    repeat_experiment_name = f"{source_experiment_basename}_trial_{trial_number}_seed_{seed}"
     config["experiment_name"] = repeat_experiment_name
     config["run_dir"] = str(RUNS_DIR)
     config["seed"] = seed
@@ -167,7 +132,7 @@ def train_repeat(source_experiment_name: str, trial_number: int, seed: int, base
         yaml.dump(config, file)
 
     with mlflow.start_run(run_name=f"seed_{seed}", nested=True):
-        mlflow.log_param("source_experiment_name", source_experiment_name)
+        mlflow.log_param("source_experiment_name", source_experiment_basename)
         mlflow.log_param("source_trial_number", trial_number)
         mlflow.log_param("seed", seed)
         mlflow.log_artifact(str(config_path), artifact_path="config")
@@ -178,38 +143,44 @@ def train_repeat(source_experiment_name: str, trial_number: int, seed: int, base
         mlflow.log_param("nh_run_folder", str(run_folder))
 
 
-def main() -> None:
-    args = parse_args()
-    experiment_name, trial_number, seeds = get_user_inputs(args)
+def validate_settings() -> tuple[str, str]:
+    normalized_source_experiment_name = normalize_experiment_name(SOURCE_EXPERIMENT_NAME)
+    normalized_output_experiment_name = normalize_experiment_name(OUTPUT_EXPERIMENT_NAME)
 
-    source_experiment_name = experiment_name.strip("/")
-    normalized_experiment_name = normalize_experiment_name(experiment_name)
-    rerun_experiment_name = f"/Shared/{source_experiment_name.split('/')[-1]}_best_model"
+    if SOURCE_TRIAL_NUMBER is None:
+        raise RuntimeError("Set SOURCE_TRIAL_NUMBER at the top of the file before running.")
+    if not SEEDS:
+        raise RuntimeError("Set at least one seed in SEEDS before running.")
+
+    return normalized_source_experiment_name, normalized_output_experiment_name
+
+
+def main() -> None:
+    normalized_source_experiment_name, normalized_output_experiment_name = validate_settings()
+    source_experiment_basename = normalized_source_experiment_name.split("/")[-1]
 
     mlflow.set_tracking_uri("databricks")
     client = MlflowClient()
 
-    experiment = client.get_experiment_by_name(normalized_experiment_name)
+    experiment = client.get_experiment_by_name(normalized_source_experiment_name)
     if experiment is None:
-        raise RuntimeError(f"MLflow experiment '{normalized_experiment_name}' not found.")
+        raise RuntimeError(f"MLflow experiment '{normalized_source_experiment_name}' not found.")
 
-    trial_run = get_trial_run(client, experiment.experiment_id, trial_number)
+    trial_run = get_trial_run(client, experiment.experiment_id, SOURCE_TRIAL_NUMBER)
     trial_config = load_trial_config(client, trial_run.info.run_id)
     if not isinstance(trial_config, dict):
         raise RuntimeError(f"Expected dict-like YAML config, got {type(trial_config).__name__}.")
 
-    mlflow.set_experiment(rerun_experiment_name)
-    with mlflow.start_run(run_name=f"best_model_trial_{trial_number}") as parent_run:
-        mlflow.log_param("source_experiment_name", normalized_experiment_name)
-        mlflow.log_param("source_trial_number", trial_number)
+    mlflow.set_experiment(normalized_output_experiment_name)
+    with mlflow.start_run(run_name=f"best_model_trial_{SOURCE_TRIAL_NUMBER}") as parent_run:
+        mlflow.log_param("source_experiment_name", normalized_source_experiment_name)
+        mlflow.log_param("source_trial_number", SOURCE_TRIAL_NUMBER)
         mlflow.log_param("source_run_id", trial_run.info.run_id)
-        mlflow.log_param("base_config_path", str(BASE_CONFIG))
         mlflow.log_param("runs_dir", str(RUNS_DIR))
         mlflow.set_tag("rerun_type", "best_model_retrain")
 
-        for seed in seeds:
-            train_repeat(source_experiment_name.split("/")[-1], trial_number, seed, trial_config)
+        for seed in SEEDS:
+            train_repeat(source_experiment_basename, SOURCE_TRIAL_NUMBER, seed, trial_config)
 
 
-if __name__ == "__main__":
-    main()
+main()
