@@ -32,7 +32,7 @@ dynamics_embedding:
 epochs: 75
 experiment_name: development_run
 head: regression
-hidden_size: 128
+hidden_size: 64
 initial_forget_bias: 3
 learning_rate:
   0: 0.001

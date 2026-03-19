@@ -16,9 +16,9 @@ import numpy as np
 import datetime
 
 EXPERIMENT_NAME = f"hdsr_lstm_optuna_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-N_TRIALS = 5
+N_TRIALS = 50
 BASE_CONFIG = "../../config.yml" #, "config_simulatie_2.yml", "config_simulatie_3.yml", "config_simulatie_5.yml"]
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path("/Workspace/Shared/neural_hydrology_fork")
 RUNS_DIR = PROJECT_ROOT / "runs"
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -28,7 +28,6 @@ mlflow.set_experiment(f"/Shared/{EXPERIMENT_NAME}")
 # make config folder
 config_folder = Path(f'../../configs_{EXPERIMENT_NAME}')
 config_folder.mkdir(parents=True, exist_ok=True)
-
 
 
 def run_neural_hydrology_model(config_name):
@@ -67,9 +66,9 @@ def objective(trial):
         config['experiment_name'] = experiment_name
 
         config["run_dir"] = str(RUNS_DIR)
-        config['hidden_size'] = 16 
-        config['train_start_date'] = '01/01/2017'
-        config['epochs'] = 20
+        config['hidden_size'] = 64
+        # config['train_start_date'] = '01/01/2017'
+        # config['epochs'] = 20
 
 
         # dropout, also apply to the embedding networks
@@ -171,8 +170,6 @@ study = optuna.create_study(
     storage=f'sqlite:////local_disk0/tmp/{EXPERIMENT_NAME}.db',
     load_if_exists=True
 )
-
-
 
 
 with mlflow.start_run(run_name=EXPERIMENT_NAME) as parent_run:
