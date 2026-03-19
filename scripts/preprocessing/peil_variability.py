@@ -17,7 +17,7 @@ def read_peilgebied(path: Path) -> gpd.GeoDataFrame:
     return gdf
 
 
-def read_polders(source_crs="EPSG:4326", target_crs: str = "EPSG:28992") -> gpd.GeoDataFrame:
+def read_polders(source_crs="EPSG:28992", target_crs: str = "EPSG:28992") -> gpd.GeoDataFrame:
 
     path = Path(__file__).parent.parent.parent / "data" / "attributes" / "polders_data_aangevuld.csv"
     df = pd.read_csv(path)
