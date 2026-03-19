@@ -121,6 +121,7 @@ def peil_stats_to_polder(polders_gdf: gpd.GeoDataFrame, peilgebied_gdf: gpd.GeoD
         "mean": "peil_mean",
         "std": "peil_std",
     })
+    polders_gdf = polders_gdf.drop(columns=["peil_min", "peil_max", "peil_mean", "peil_std"], errors="ignore")
     polders_gdf = polders_gdf.merge(
         summary,
         left_on="SHAPE_ID",
