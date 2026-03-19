@@ -75,39 +75,88 @@ def objective(trial):
         dropout = trial.suggest_categorical('dropout', [0.1, 0.2, 0.3, 0.4])
         config['output_dropout'] = dropout
         config['learning_rate'] = {0: trial.suggest_categorical('learning_rate', [0.001, 0.0005, 0.0001, 0.00005, 0.00001])}
-        static_variables = ['water_percentage',
-                            'stedelijk_percentage',
-                            'oppervlak',
-                            'water_opp',
-                            'stedelijk_opp',
-                            'zand',
-                            'klei',
-                            'veen',
-                            'stuw']  
 
-        # maaiveldhoogteopties mean/mediaan
-        static_variable_maaiveld_hoogte_mean_median_options = [[], ['maaiveldhoogte'],
-    ['maaiveldhoogte_median'], ['maaiveldhoogte', 'maaiveldhoogte_median']]
-        static_mv_options1 = trial.suggest_categorical('static_variables_maaiveldhoogte_mean_median', [0, 1, 2, 3])
-        static_variables_maaiveldhoogte_mean_median = static_variable_maaiveld_hoogte_mean_median_options[static_mv_options1]
 
-        # willen we de iqr en/of p95-p05 mee van het maaiveldhoogte
-        static_variables_maaiveldhoogte_iqr_p95_p05_options = [[], ['maaiveldhoogte_iqr'],
-        ['maaiveldhoogte_p95_minus_p05'], ['maaiveldhoogte_iqr', 'maaiveldhoogte_p95_minus_p05']]
-        static_nv_options2 = trial.suggest_categorical('static_variables_maaiveldhoogte_iqr_p95_p05', [0, 1, 2, 3])
-        static_variables_maaiveldhoogte_iqr_p95_p05 = static_variables_maaiveldhoogte_iqr_p95_p05_options[static_nv_options2]
+        # STATIC VARIABLES SELECTION OF THE HPO BELOW
+        static_variables = [
+            'water_percentage',
+            'stedelijk_percentage',
+            'oppervlak',
+            'water_opp',
+            'stedelijk_opp',
+        ]
 
-        # willen we de infiltratie en/of permeabiliteit meeneemen in de statische variabelen
-        static_variables_infiltratie_permeabiliteit_options = [[], ['infiltratie'], ['permabiliteit'], ['infiltratie', 'permabiliteit']]
-        static_inf_perm_options = trial.suggest_categorical('static_variables_infiltratie_permeabiliteit', [0, 1, 2, 3])
-        static_variables_infiltratie_permeabiliteit = static_variables_infiltratie_permeabiliteit_options[static_inf_perm_options]
+        maaiveldhoogte_mean_median_options = {
+            'none': [],
+            'mean': ['maaiveldhoogte'],
+            'median': ['maaiveldhoogte_median'],
+            'mean_median': ['maaiveldhoogte', 'maaiveldhoogte_median'],
+        }
+        maaiveldhoogte_mean_median_choice = trial.suggest_categorical(
+            'static_variables_maaiveldhoogte_mean_median',
+            list(maaiveldhoogte_mean_median_options.keys()),
+        )
+        static_variables_maaiveldhoogte_mean_median = maaiveldhoogte_mean_median_options[
+            maaiveldhoogte_mean_median_choice
+        ]
 
-        # alle statische variabelen bij elkaar mergen
-        static_variables = \
-                    static_variables + \
-                    static_variables_maaiveldhoogte_mean_median + \
-                    static_variables_maaiveldhoogte_iqr_p95_p05 + \
-                    static_variables_infiltratie_permeabiliteit
+        maaiveldhoogte_iqr_p95_p05_options = {
+            'none': [],
+            'iqr': ['maaiveldhoogte_iqr'],
+            'p95_p05': ['maaiveldhoogte_p95_minus_p05'],
+            'iqr_p95_p05': ['maaiveldhoogte_iqr', 'maaiveldhoogte_p95_minus_p05'],
+        }
+        maaiveldhoogte_iqr_p95_p05_choice = trial.suggest_categorical(
+            'static_variables_maaiveldhoogte_iqr_p95_p05',
+            list(maaiveldhoogte_iqr_p95_p05_options.keys()),
+        )
+        static_variables_maaiveldhoogte_iqr_p95_p05 = maaiveldhoogte_iqr_p95_p05_options[
+            maaiveldhoogte_iqr_p95_p05_choice
+        ]
+
+        kwel_options = {
+            'none': [],
+            'kwel_mean': ['kwel_mean'],
+        }
+        kwel_choice = trial.suggest_categorical(
+            'static_variables_kwel',
+            list(kwel_options.keys()),
+        )
+        static_variables_kwel = kwel_options[kwel_choice]
+
+        peil_options = {
+            'none': [],
+            'peil_range': ['peil_range'],
+        }
+        peil_choice = trial.suggest_categorical(
+            'static_variables_peil',
+            list(peil_options.keys()),
+        )
+        static_variables_peil = peil_options[peil_choice]
+
+        infiltratie_permeabiliteit_options = {
+            'none': [],
+            'infiltratie': ['infiltratie'],
+            'permabiliteit': ['permabiliteit'],
+            'infiltratie_permabiliteit': ['infiltratie', 'permabiliteit'],
+        }
+        infiltratie_permeabiliteit_choice = trial.suggest_categorical(
+            'static_variables_infiltratie_permeabiliteit',
+            list(infiltratie_permeabiliteit_options.keys()),
+        )
+        static_variables_infiltratie_permeabiliteit = infiltratie_permeabiliteit_options[
+            infiltratie_permeabiliteit_choice
+        ]
+
+        static_variables = (
+            static_variables
+            + static_variables_maaiveldhoogte_mean_median
+            + static_variables_maaiveldhoogte_iqr_p95_p05
+            + static_variables_kwel
+            + static_variables_peil
+            + static_variables_infiltratie_permeabiliteit
+        )
+
 
         config['static_attributes'] = static_variables
 
