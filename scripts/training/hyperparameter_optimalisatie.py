@@ -17,16 +17,17 @@ import datetime
 
 EXPERIMENT_NAME = f"hdsr_lstm_optuna_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
 N_TRIALS = 50
-BASE_CONFIG = "../../config.yml" #, "config_simulatie_2.yml", "config_simulatie_3.yml", "config_simulatie_5.yml"]
-PROJECT_ROOT = Path("/Workspace/Shared/neural_hydrology_fork")
-RUNS_DIR = PROJECT_ROOT / "runs"
+BASE_CONFIG = "/Workspace/Shared/neural_hydrology_fork/config.yml"
+OUTPUT_DIR = Path("/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output")
+RUNS_DIR = OUTPUT_DIR / "runs"
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
+os.chdir(OUTPUT_DIR)
 
 mlflow.set_tracking_uri("databricks")  # if running on Databricks this is often already configured
 mlflow.set_experiment(f"/Shared/{EXPERIMENT_NAME}")
 
 # make config folder
-config_folder = Path(f'../../configs_{EXPERIMENT_NAME}')
+config_folder = OUTPUT_DIR / f'configs_{EXPERIMENT_NAME}'
 config_folder.mkdir(parents=True, exist_ok=True)
 
 
@@ -45,14 +46,27 @@ def run_neural_hydrology_model(config_name):
         start_run(config_file=Path(config_name), gpu=-1)
 
 def extract_tensorboard_scalars(logdir):
-    event_acc = EventAccumulator(logdir)
-    event_acc.Reload()  # Load the TensorBoard logs
-
+    """Extract all TensorBoard scalars, searching subdirectories for event files."""
     scalars = {}
-    for tag in event_acc.Tags()['scalars']:  # Get all scalar tags
-        scalars[tag] = [(e.step, e.value) for e in event_acc.Scalars(tag)]
-    
+
+    # Walk logdir and all subdirectories to find every event file
+    for root, dirs, files in os.walk(logdir):
+        event_files = [f for f in files if f.startswith('events.out.tfevents')]
+        if event_files:
+            event_acc = EventAccumulator(root)
+            event_acc.Reload()
+            for tag in event_acc.Tags().get('scalars', []):
+                scalars[tag] = [(e.step, e.value) for e in event_acc.Scalars(tag)]
+
     return scalars
+
+def find_tag(data, pattern):
+    """Find a TensorBoard tag matching the pattern (case-insensitive)."""
+    pattern_lower = pattern.lower()
+    for tag in data.keys():
+        if tag.lower() == pattern_lower:
+            return tag
+    raise KeyError(f"No tag matching '{pattern}' found. Available tags: {list(data.keys())}")
     
 def objective(trial):
     with mlflow.start_run(run_name=f"trial_{trial.number}", nested=True):
@@ -167,10 +181,9 @@ def objective(trial):
         with open(config_path, "w") as file:
             yaml.dump(config, file)
 
-        # schrijf de nieuwe config naar een nieuw bestand
-        mlflow.log_params(
-            config
-        )
+        # Log only Optuna trial params (prefixed to avoid collision with NH's internal logging)
+        # Full config is already saved as artifact below
+        mlflow.log_params({f"optuna/{k}": str(v) for k, v in trial.params.items()})
         mlflow.log_artifact(config_path, artifact_path="config")
 
         # Determine device mode
@@ -186,27 +199,61 @@ def objective(trial):
 
         # Filter only directories 
         folders_in_runs = [f for f in folders_in_runs if os.path.isdir(f)]
-        run_folder = [f for f in folders_in_runs if os.path.basename(f).startswith(experiment_name)][0]
+
+        # Match on experiment_name + '_' to avoid partial prefix collisions
+        # (e.g. 'development_run_0' should not match 'development_run_0903_140750')
+        # Then take the most recently modified folder in case multiple matches exist
+        matching_folders = [
+            f for f in folders_in_runs
+            if os.path.basename(f).startswith(experiment_name + '_')
+        ]
+        if not matching_folders:
+            raise RuntimeError(
+                f"No run folder found starting with '{experiment_name}_' in {RUNS_DIR}. "
+                f"Available folders: {[os.path.basename(f) for f in folders_in_runs]}"
+            )
+        run_folder = max(matching_folders, key=os.path.getmtime)
+        print(f"Selected run folder: {os.path.basename(run_folder)}")
 
         # now we need to log the metric we want to optimize from the neural hydrology model using the latest folder
         # we optimize the hyperparameters to maximize the mean NSE score
         data = extract_tensorboard_scalars(run_folder)
-        validation_NSE_scores_1d = np.array([loss for epoch, loss in data['valid/mean_nse_1d']])
-        validation_NSE_scores_1h = np.array([loss for epoch, loss in data['valid/mean_nse_1h']])
+        # Check for validation tags before accessing them
+        if not any('valid' in tag for tag in data.keys()):
+            print("WARNING: No validation tags found in TensorBoard logs.")
+            print("Run folder contents:")
+            for root, dirs, files in os.walk(run_folder):
+                level = root.replace(str(run_folder), '').count(os.sep)
+                indent = ' ' * 2 * level
+                print(f"{indent}{os.path.basename(root)}/")
+                sub_indent = ' ' * 2 * (level + 1)
+                for file in files:
+                    print(f"{sub_indent}{file}")
+            raise RuntimeError(
+                f"No validation TensorBoard tags found in {run_folder}. "
+                f"Available tags: {list(data.keys())}. "
+                "Check that NeuralHydrology is configured to log validation metrics to TensorBoard "
+                "(config: log_tensorboard: true, validate_every: 1)."
+            )
+
+        tag_nse_1d = find_tag(data, 'valid/mean_nse_1D')
+        tag_nse_1h = find_tag(data, 'valid/mean_nse_1h')
+
+        validation_NSE_scores_1d = np.array([loss for epoch, loss in data[tag_nse_1d]])
+        validation_NSE_scores_1h = np.array([loss for epoch, loss in data[tag_nse_1h]])
         validation_NSE_scores_mean_1d_1h = (validation_NSE_scores_1d + validation_NSE_scores_1h) / 2
 
         # we take the maximum validation NSE score
         max_validation_NSE_score = float(np.max(validation_NSE_scores_mean_1d_1h))
 
         for (epoch_nse_1d, loss_nse_1d), (epoch_nse_1h, loss_nse_1h) in zip(
-            data["valid/mean_nse_1d"],
-            data["valid/mean_nse_1h"],
+            data[tag_nse_1d],
+            data[tag_nse_1h],
         ):
             mlflow.log_metric("val_nse_1d", float(loss_nse_1d), step=int(epoch_nse_1d))
             mlflow.log_metric("val_nse_1h", float(loss_nse_1h), step=int(epoch_nse_1h))
             mlflow.log_metric("val_nse_1h_1d", (float(loss_nse_1d) + float(loss_nse_1h))/2, step=int(epoch_nse_1h))
 
-        mlflow.log_params(trial.params)
         mlflow.log_metric("max_validation_nse_1d_1h", max_validation_NSE_score)
         mlflow.log_artifact(str(config_path), artifact_path="config")
 
@@ -235,5 +282,5 @@ with mlflow.start_run(run_name=EXPERIMENT_NAME) as parent_run:
     hist_fig = optuna.visualization.plot_optimization_history(study)
     mlflow.log_figure(hist_fig, "optuna/optimization_history.html")
     mlflow.log_metric("best_value", study.best_value)
-    mlflow.log_params(study.best_trial.params)
+    mlflow.log_params({f"best/{k}": str(v) for k, v in study.best_trial.params.items()})
     mlflow.set_tag("best_trial_number", study.best_trial.number)

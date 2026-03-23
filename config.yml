@@ -1,9 +1,10 @@
-batch_size: 256
+batch_size: 16384
 clip_gradient_norm: 1
 cache_validation_data: true
 clip_targets_to_zero: 
 - afvoer
-data_dir: ../../data
+# data_dir: ../../data
+data_dir: /Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input
 dataset: generic
 device: cuda:0 # of cpu
 dynamic_inputs:
@@ -29,7 +30,7 @@ dynamics_embedding:
   hiddens:
   - 16
   type: fc
-epochs: 75
+epochs: 100
 experiment_name: development_run
 head: regression
 hidden_size: 64
@@ -78,10 +79,12 @@ statics_embedding:
 target_noise_std: 0
 target_variables:
 - afvoer
-test_basin_file: ../../data/hdsr_polders.txt
+# test_basin_file: ../../data/hdsr_polders.txt
+test_basin_file: /Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input/hdsr_polders.txt
 test_end_date: 01/01/2023
 test_start_date: 01/01/2021
-train_basin_file: ../../data/hdsr_polders.txt
+# train_basin_file: ../../data/hdsr_polders.txt
+train_basin_file: /Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input/hdsr_polders.txt
 train_end_date: 01/01/2019
 train_start_date: 01/01/2014
 use_basin_id_encoding: false
@@ -90,6 +93,7 @@ use_frequencies:
 - 1h
 validate_every: 1
 validate_n_random_basins: 9999
-validation_basin_file: ../../data/hdsr_polders.txt
+# validation_basin_file: ../../data/hdsr_polders.txt
+validation_basin_file: /Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input/hdsr_polders.txt
 validation_end_date: 01/01/2021
 validation_start_date: 01/01/2019
