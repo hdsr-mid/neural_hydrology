@@ -16,7 +16,7 @@ import numpy as np
 import datetime
 
 EXPERIMENT_NAME = f"hdsr_lstm_optuna_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-N_TRIALS = 50
+N_TRIALS = 3
 BASE_CONFIG = "../../config.yml" #, "config_simulatie_2.yml", "config_simulatie_3.yml", "config_simulatie_5.yml"]
 PROJECT_ROOT = Path("/Workspace/Shared/neural_hydrology_fork")
 RUNS_DIR = PROJECT_ROOT / "runs"
@@ -66,9 +66,9 @@ def objective(trial):
         config['experiment_name'] = experiment_name
 
         config["run_dir"] = str(RUNS_DIR)
-        config['hidden_size'] = 64
-        # config['train_start_date'] = '01/01/2017'
-        # config['epochs'] = 20
+        config['hidden_size'] = 4
+        config['train_start_date'] = '01/01/2017'
+        config['epochs'] = 3
 
 
         # dropout, also apply to the embedding networks
@@ -190,7 +190,31 @@ def objective(trial):
 
         # now we need to log the metric we want to optimize from the neural hydrology model using the latest folder
         # we optimize the hyperparameters to maximize the mean NSE score
+        print('+++===folders===+++')
+        print('====++config path++====')
+        print(config_path)
+        print('-/-/-/-RUNS_DIR-\-\-\-')
+        print(RUNS_DIR)
+        print('------in runs dir-----')
+        print(os.listdir(RUNS_DIR))
+        print('===folders_in_runs===')
+        print(folders_in_runs)
+        print('===run_folders===')
+        print([f for f in folders_in_runs if os.path.basename(f).startswith(experiment_name)])
+        print('===run_folder===')
+        print(run_folder)
+        print('trial number', trial.number)
+        print('experiment name', experiment_name)
+
+        # extract tensorboard data
         data = extract_tensorboard_scalars(run_folder)
+
+        print('===Tensorboard read:===')
+        print('data.keys()')
+        print(data.keys())
+        print('====data====')
+        print(data)
+
         validation_NSE_scores_1d = np.array([loss for epoch, loss in data['valid/mean_nse_1d']])
         validation_NSE_scores_1h = np.array([loss for epoch, loss in data['valid/mean_nse_1h']])
         validation_NSE_scores_mean_1d_1h = (validation_NSE_scores_1d + validation_NSE_scores_1h) / 2
