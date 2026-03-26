@@ -1,4 +1,4 @@
-batch_size: 16384
+batch_size: 512
 clip_gradient_norm: 1
 cache_validation_data: true
 clip_targets_to_zero: 
@@ -30,7 +30,7 @@ dynamics_embedding:
   hiddens:
   - 16
   type: fc
-epochs: 100
+epochs: 75
 experiment_name: development_run
 head: regression
 hidden_size: 64

@@ -19,16 +19,12 @@ EXPERIMENT_NAME = f"hdsr_lstm_optuna_{datetime.datetime.now().strftime('%Y%m%d_%
 N_TRIALS = 50
 BASE_CONFIG = "/Workspace/Shared/neural_hydrology_fork/config.yml"
 OUTPUT_DIR = Path("/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output")
-RUNS_DIR = OUTPUT_DIR / "runs"
+RUNS_DIR = OUTPUT_DIR / "HPO/runs"
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 os.chdir(OUTPUT_DIR)
 
 mlflow.set_tracking_uri("databricks")  # if running on Databricks this is often already configured
 mlflow.set_experiment(f"/Shared/{EXPERIMENT_NAME}")
-
-# make config folder
-config_folder = OUTPUT_DIR / f'configs_{EXPERIMENT_NAME}'
-config_folder.mkdir(parents=True, exist_ok=True)
 
 
 def run_neural_hydrology_model(config_name):
@@ -79,7 +75,11 @@ def objective(trial):
         experiment_name = experiment_name + '_' + str(trial.number)
         config['experiment_name'] = experiment_name
 
-        config["run_dir"] = str(RUNS_DIR)
+        # Create a per-trial parent folder that holds both config and run output
+        trial_dir = RUNS_DIR / f"trial_{trial.number}"
+        trial_dir.mkdir(parents=True, exist_ok=True)
+
+        config["run_dir"] = str(trial_dir)
         config['hidden_size'] = 64
         # config['train_start_date'] = '01/01/2017'
         # config['epochs'] = 20
@@ -174,9 +174,9 @@ def objective(trial):
 
         config['static_attributes'] = static_variables
 
-        # maak bestandsnaam voor de nieuwe config
+        # Save config inside the trial folder
         config_name = f'config_simulatie_nr_{trial.number}.yml'
-        config_path = config_folder / config_name
+        config_path = trial_dir / config_name
 
         with open(config_path, "w") as file:
             yaml.dump(config, file)
@@ -194,23 +194,22 @@ def objective(trial):
         # draai het model met de nieuwe config
         run_neural_hydrology_model(config_path)
 
-        # we assume the latest folder in the runs directory is of past training above
-        folders_in_runs = [os.path.join(RUNS_DIR, folder) for folder in os.listdir(RUNS_DIR)]
+        # Find the run output folder inside this trial's directory
+        folders_in_trial = [os.path.join(trial_dir, folder) for folder in os.listdir(trial_dir)]
 
-        # Filter only directories 
-        folders_in_runs = [f for f in folders_in_runs if os.path.isdir(f)]
+        # Filter only directories
+        folders_in_trial = [f for f in folders_in_trial if os.path.isdir(f)]
 
         # Match on experiment_name + '_' to avoid partial prefix collisions
-        # (e.g. 'development_run_0' should not match 'development_run_0903_140750')
         # Then take the most recently modified folder in case multiple matches exist
         matching_folders = [
-            f for f in folders_in_runs
+            f for f in folders_in_trial
             if os.path.basename(f).startswith(experiment_name + '_')
         ]
         if not matching_folders:
             raise RuntimeError(
-                f"No run folder found starting with '{experiment_name}_' in {RUNS_DIR}. "
-                f"Available folders: {[os.path.basename(f) for f in folders_in_runs]}"
+                f"No run folder found starting with '{experiment_name}_' in {trial_dir}. "
+                f"Available folders: {[os.path.basename(f) for f in folders_in_trial]}"
             )
         run_folder = max(matching_folders, key=os.path.getmtime)
         print(f"Selected run folder: {os.path.basename(run_folder)}")
