@@ -159,12 +159,13 @@ Voor HPO gebruik je `neural_hydrology/scripts/training/hyperparameter_optimalisa
 
 ### Het maken van verwachtingen met een ensemble van neerslag
 In deze repo staat nog geen kant-en-klaar “forecast pipeline” script, maar de aanbevolen werkwijze op Databricks is:
-- **Stap 1: maak per neerslaglid een forcing-dataset**:
+- **Stap 1: maak per ensemble member een forcing-dataset**:
   - Zorg dat je voor elk ensemble member een eigen `time_series` NetCDF per polder beschikbaar maakt (zelfde variabelen/structuur als training), maar met neerslag vervangen door het betreffende member.
+  - De data van HDSR is beschikbaar in het WIS en kan opgehaald worden via de FEWS Webservices.
   - Schrijf elk member weg in een aparte input-folder op een Volume, bv. `/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input/ens_001/`, `/ens_002/`, etc.
 - **Stap 2: run model-inference per ensemble member**:
-  - Gebruik het getrainde model (run-folder/checkpoint) en laat het model een verwachting maken op de forecast-periode per ensemble member.
-  - Praktisch: maak per member een kopie/variant van `config.yml` bijv. `config_ens1` waarin `data_dir` wijst naar de betreffende ensemble-map en de test/forecast-periode staat ingesteld.
+  - Gebruik het getrainde model (run-folder/checkpoint) en laat het model een verwachting maken over de forecast-periode (+48-54 uur) per ensemble member.
+  - Praktisch: maak per member een kopie/variant van `config.yml` bijv. `config_ens1` waarin `data_dir` wijst naar de betreffende ensemble-map en de test/forecast-periode staat ingesteld. Deze laatste dient ingesteld te worden op basis van de beschikbare data voor de forecast.
 - **Stap 3: combineer resultaten tot ensemble-statistieken**:
   - Combineer per polder de gesimuleerde afvoer \(Q_{sim}\) van alle leden tot minimaal:
     - ensemble-mean/median
@@ -182,7 +183,7 @@ De run-config staat in `config.yml`. Deze definieert o.a.:
 
 ## Resultaten
 
-De training resultaten worden opgeslagen in een `runs/` folder (niet meegeleverd vanwege grootte). Elke run bevat:
+De training resultaten worden lokaal opgeslagen in een `runs/` folder (niet meegeleverd vanwege grootte). Elke run bevat:
 - Getrainde model checkpoints
 - Evaluatie metrics
 - Visualisaties
