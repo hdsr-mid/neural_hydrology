@@ -90,16 +90,52 @@ python neural_hydrology/scripts/analysis/best_model.py
 ```
 
 ## Databricks
-Deze branch is bedoeld om het NeuralHydrology-framework te draaien op Databricks. De scripts in `scripts/training/` zijn hierop ingericht (paden onder `/Workspace/...` en `/Volumes/...`, en MLflow tracking via `Databricks`).
+Deze branch is bedoeld om het NeuralHydrology-framework te draaien op Databricks. De scripts in `scripts/training/` zijn hierop ingericht (paden onder `Workspace` en `Catalog/Volumes`, rekenkracht via `Compute`, en MLflow tracking via `Jobs & Pipelines`). In het project is gewerkt in de instantie `dbw-datascience-tst-weu-001` binnen Databricks.
 
 ### Installatie en update van repo in Databricks
-- **Repo toevoegen**: gebruik Databricks *Repos* om deze Git-repository te clonen en deze branch te selecteren.
-- **Repo updaten**:
-  - Werk bij via de *Pull* actie in *Repos* (of wissel van branch indien nodig).
-  - Sommige scripts verwijzen naar een vaste plek voor de basisconfig, bv. `BASE_CONFIG = "/Workspace/Shared/neural_hydrology_fork/config.yml"`. Zorg dat dit pad klopt voor de `config.yml`.
-- **Cluster dependencies**:
-  - Installeer Python libraries vanaf `requirements.txt`.
-  - Voor GPU-training: kies een cluster met CUDA/GPU runtime. De scripts schakelen automatisch tussen GPU/CPU op basis van `torch.cuda.is_available()`.
+
+#### Repo toevoegen als Git folder (eerste keer) 
+- **Workspace locatie kiezen**: ga naar *Workspace* en navigeer naar de plek waar je de projectfolder wilt hebben, bijv. onder `Shared` of onder `Users` → `rob.van.den.hengel@hdsr.nl`.
+- **Git folder aanmaken**: rechtermuisknop op de map waarin je het project wilt plaatsen → *Create* → *Git folder*.
+- **URL plakken**: plak de Git-URL van de repository bij *URL*.
+- **Naam instellen**: pas indien nodig de *Name* aan zoals die in Databricks getoond wordt. Deze naam moet **uniek** zijn binnen die locatie in Databricks.
+- **Aanmaken**: klik *Create Git folder* en selecteer (indien gevraagd) direct de juiste branch.
+- **In dit project**: in dit project zijn folders gebruikt onder `Workspace/Shares/neural_hydrology` en `Workspace/Shares/neural_hydrology_fork`. `neural_hydrology_fork` is gebruikt vanwege beperkte rechten op het GitHub-account `hdsr-mid`, en zodoende om via een gesyncte fork te werken met het account `robvandenhengelhdsr`.
+
+#### Repo updaten (na wijzigingen buiten Databricks)
+- **Navigeer naar de Git folder**: ga in *Workspace* naar de Git folder van het project.
+- **Open Git-menu**: klik op het Git-icoon rechts naast de naam van de Git folder (knop met Git-logo + branchnaam).
+- **Lokale wijzigingen eerst veiligstellen (best practise)**: als er in Databricks lokale wijzigingen zijn, commit en push die eerst naar GitHub voordat je gaat pullen.
+- **Branch kiezen**: selecteer linksboven de branch die je uit GitHub wilt ophalen/gaan gebruiken in Databricks.
+- **Pull uitvoeren**: klik rechtsboven op *Pull* om de laatste wijzigingen op te halen.
+- **Let op paden naar `config.yml`**: sommige scripts verwijzen naar een vaste plek voor de basisconfig, bv. `BASE_CONFIG = "/Workspace/Shared/neural_hydrology_fork/config.yml"`. Zorg dat dit pad klopt voor jouw Git folder-locatie in *Workspace*.
+
+#### Data Volume (input/output)
+- **Dataset**: de repo bevat niet de trainingsdataset vanwege de omvang. Binnen Databricks zijn datasets beschikbaar via de *Catalog*.
+- **Volume**: voor dit project is in de Catalog een Volume aangemaakt in de database `default` met de naam `data_neuralhydrology`.
+  - **Input**: subfolder `input` bevat de benodigde gegevens (tijdseries & gebiedskenmerken) voor training.
+  - **Output**: subfolder `output` is bedoeld voor het wegschrijven van modelresultaten.
+
+#### Compute aanmaken of starten
+- **Computeless werken**: je kunt (deels) zonder compute werken, maar dan kun je bijvoorbeeld geen terminal openen om via command line te werken en niet alle workloads draaien.
+- **Nieuwe compute**: ga naar *Compute* → *Create compute* en volg de instructies. Voor GPU-training kies je een cluster met CUDA/GPU runtime. De scripts schakelen automatisch tussen GPU/CPU op basis van `torch.cuda.is_available()`.
+- **Bestaande compute starten**: ga naar *Compute* en klik op het *Play*-icoon (driehoek naar rechts) bij de gewenste compute (verschijnt bij hover).
+
+#### Libraries installeren op de compute
+- Klik op de compute → tab *Libraries* → *Install new*.
+- Navigeer naar `requirements.txt` en klik *Install*.
+
+#### Script als Job draaien (optioneel, aanbevolen voor reproduceerbare runs)
+- **Nieuwe job aanmaken**:
+  - Ga naar *Jobs & Pipelines* → *Create* → *Job*.
+  - Kies het juiste task type: *Python script*, *Notebook* of *Add another task type*. In dit project is dit meestal *Python script*.
+  - Vul *Task name* in.
+  - Kies onder *Compute* de compute waarop de job moet draaien.
+  - Kies onder *Path* het `.py` script dat je wilt uitvoeren en selecteer dit.
+  - Klik *Create task*.
+- **Job starten**:
+  - Controleer of de compute aan staat.
+  - Open de job en klik rechtsboven op *Run now*.
 
 ### Uitvoeren van runs voor training (incl. opzet hyperparameter optimalisatie)
 #### Training van één run
@@ -125,9 +161,9 @@ Voor HPO gebruik je `neural_hydrology/scripts/training/hyperparameter_optimalisa
 In deze repo staat nog geen kant-en-klaar “forecast pipeline” script, maar de aanbevolen werkwijze op Databricks is:
 - **Stap 1: maak per neerslaglid een forcing-dataset**:
   - Zorg dat je voor elk ensemble member een eigen `time_series` NetCDF per polder beschikbaar maakt (zelfde variabelen/structuur als training), maar met neerslag vervangen door het betreffende member.
-  - Schrif elk member weg in een aparte input-folder op een Volume, bv. `/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input/ens_001/`, `/ens_002/`, etc.
+  - Schrijf elk member weg in een aparte input-folder op een Volume, bv. `/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input/ens_001/`, `/ens_002/`, etc.
 - **Stap 2: run model-inference per ensemble member**:
-  - Gebruik het getrainde model (run-folder/checkpoint) en laat het modeleen verwachitng maken op de forecast-periode per ensemble member.
+  - Gebruik het getrainde model (run-folder/checkpoint) en laat het model een verwachting maken op de forecast-periode per ensemble member.
   - Praktisch: maak per member een kopie/variant van `config.yml` bijv. `config_ens1` waarin `data_dir` wijst naar de betreffende ensemble-map en de test/forecast-periode staat ingesteld.
 - **Stap 3: combineer resultaten tot ensemble-statistieken**:
   - Combineer per polder de gesimuleerde afvoer \(Q_{sim}\) van alle leden tot minimaal:
