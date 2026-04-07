@@ -22,12 +22,12 @@ import datetime
 EXPERIMENT_NAME = "runs" # "LSTM_wonderful_williamson_20260407_124224"
 TRIAL_NAME = "trial_28"
 PATH_HPO = Path(f"/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output/HPO/{EXPERIMENT_NAME}")
-RETRAIN_NAME = "example_retrain"
 NUMBER_OF_RETRAININGS = 2
 
 RETRAIN_BASE_DIR = Path("/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output/BATCH_RETRAIN")
-DESTINATION_DIR = RETRAIN_BASE_DIR / f"{TRIAL_NAME}_{RETRAIN_NAME}"
-MLFLOW_EXPERIMENT_NAME = f"/{TRIAL_NAME}_{RETRAIN_NAME}"
+DESTINATION_DIR = RETRAIN_BASE_DIR / f"{EXPERIMENT_NAME}_{TRIAL_NAME}"
+COPIED_TRIAL_DIR = DESTINATION_DIR / TRIAL_NAME
+MLFLOW_EXPERIMENT_NAME = f"/Shared/{EXPERIMENT_NAME}_{TRIAL_NAME}_retrain"
 
 mlflow.set_tracking_uri("databricks")
 mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
@@ -35,9 +35,7 @@ mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
 
 def run_neural_hydrology_model(config_name):
     run_config = Config(Path(config_name))
-    print('model:\t\t', run_config.model)
-    print('use_frequencies:', run_config.use_frequencies)
-    print('seq_length:\t', run_config.seq_length)
+
 
     if torch.cuda.is_available():
         start_run(config_file=Path(config_name))
@@ -67,6 +65,51 @@ def find_tag(data, pattern):
         if tag.lower() == pattern_lower:
             return tag
     raise KeyError(f"No tag matching '{pattern}' found. Available tags: {list(data.keys())}")
+
+
+def log_validation_metrics(run_folder):
+    data = extract_tensorboard_scalars(run_folder)
+    if not any('valid' in tag for tag in data.keys()):
+        print("WARNING: No validation tags found in TensorBoard logs.")
+        print("Run folder contents:")
+        for root, dirs, files in os.walk(run_folder):
+            level = root.replace(str(run_folder), '').count(os.sep)
+            indent = ' ' * 2 * level
+            print(f"{indent}{os.path.basename(root)}/")
+            sub_indent = ' ' * 2 * (level + 1)
+            for file in files:
+                print(f"{sub_indent}{file}")
+        raise RuntimeError(
+            f"No validation TensorBoard tags found in {run_folder}. "
+            f"Available tags: {list(data.keys())}. "
+            "Check that NeuralHydrology is configured to log validation metrics to TensorBoard "
+            "(config: log_tensorboard: true, validate_every: 1)."
+        )
+
+    tag_nse_1d = find_tag(data, 'valid/mean_nse_1D')
+    tag_nse_1h = find_tag(data, 'valid/mean_nse_1h')
+
+    validation_NSE_scores_1d = np.array([loss for epoch, loss in data[tag_nse_1d]])
+    validation_NSE_scores_1h = np.array([loss for epoch, loss in data[tag_nse_1h]])
+    validation_NSE_scores_mean_1d_1h = (validation_NSE_scores_1d + validation_NSE_scores_1h) / 2
+
+    max_validation_NSE_score = float(np.max(validation_NSE_scores_mean_1d_1h))
+
+    for (epoch_nse_1d, loss_nse_1d), (epoch_nse_1h, loss_nse_1h) in zip(
+        data[tag_nse_1d],
+        data[tag_nse_1h],
+    ):
+        mlflow.log_metric("val_nse_1d", float(loss_nse_1d), step=int(epoch_nse_1d))
+        mlflow.log_metric("val_nse_1h", float(loss_nse_1h), step=int(epoch_nse_1h))
+        mlflow.log_metric(
+            "val_nse_1h_1d",
+            (float(loss_nse_1d) + float(loss_nse_1h)) / 2,
+            step=int(epoch_nse_1h),
+        )
+
+    mlflow.log_metric("max_validation_nse_1d_1h", max_validation_NSE_score)
+    mlflow.log_param("nh_run_folder", str(run_folder))
+    return max_validation_NSE_score
 
 
 def resolve_source_run_dir(source_trial_dir: Path) -> Path:
@@ -99,7 +142,7 @@ def copy_trial_folder(source_run_dir: Path, destination_dir: Path) -> Path:
     if destination_dir.exists():
         raise RuntimeError(
             f"Destination folder already exists: {destination_dir}. "
-            "Remove it first or change RETRAIN_NAME/TRIAL_NAME."
+            "Remove it first or change EXPERIMENT_NAME/TRIAL_NAME."
         )
 
     destination_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -118,7 +161,7 @@ def prepare_retrain_config(base_config_path: Path, trial_dir: Path, i_retrain: i
     with open(base_config_path) as file:
         config = yaml.load(file, Loader=yaml.FullLoader)
 
-    experiment_name = f"{TRIAL_NAME}_retrain_{RETRAIN_NAME}_{i_retrain + 1}"
+    experiment_name = f"{TRIAL_NAME}_retrain_{i_retrain + 1}"
     config["experiment_name"] = experiment_name
     config["run_dir"] = str(trial_dir)
 
@@ -134,9 +177,8 @@ def prepare_retrain_config(base_config_path: Path, trial_dir: Path, i_retrain: i
 
 def main():
     source_trial_dir = PATH_HPO / TRIAL_NAME
-    source_run_dir = resolve_source_run_dir(source_trial_dir)
-
-    copied_run_dir = copy_trial_folder(source_run_dir, DESTINATION_DIR)
+    copied_trial_dir = copy_trial_folder(source_trial_dir, COPIED_TRIAL_DIR)
+    copied_run_dir = resolve_source_run_dir(copied_trial_dir)
     copied_config_path = copied_run_dir / "config.yml"
 
     if not copied_config_path.exists():
@@ -145,22 +187,28 @@ def main():
     config_dict, config_object = load_config(copied_config_path)
 
     print(f"Source trial folder: {source_trial_dir}")
-    print(f"Resolved source run folder: {source_run_dir}")
-    print(f"Destination folder: {copied_run_dir}")
+    print(f"Copied trial folder: {copied_trial_dir}")
+    print(f"Resolved copied run folder: {copied_run_dir}")
+    print(f"Destination folder: {DESTINATION_DIR}")
     print(f"Copied config path: {copied_config_path}")
     print(f"Copied config experiment_name: {config_dict.get('experiment_name')}")
     print(f"Copied config model: {config_object.model}")
 
-    trial_dir = copied_run_dir
+    trial_dir = DESTINATION_DIR
 
     with mlflow.start_run(run_name=DESTINATION_DIR.name) as parent_run:
         mlflow.log_params(
             {
+                "source_experiment_name": EXPERIMENT_NAME,
                 "source_trial_name": TRIAL_NAME,
-                "retrain_name": RETRAIN_NAME,
                 "number_of_retrainings": NUMBER_OF_RETRAININGS,
             }
         )
+
+        with mlflow.start_run(run_name=TRIAL_NAME, nested=True):
+            mlflow.set_tag("run_type", "copied_original")
+            mlflow.log_artifact(str(copied_config_path), artifact_path="config")
+            log_validation_metrics(copied_run_dir)
 
         for i_retrain in range(NUMBER_OF_RETRAININGS):
             config_path, experiment_name = prepare_retrain_config(
@@ -170,9 +218,10 @@ def main():
             )
 
             with mlflow.start_run(
-                run_name=f"retrain_{i_retrain + 1}",
+                run_name=experiment_name,
                 nested=True,
             ):
+                mlflow.set_tag("run_type", "retrain")
                 mlflow.log_params(
                     {
                         "retrain_index": i_retrain + 1,
@@ -202,46 +251,7 @@ def main():
                 run_folder = max(matching_folders, key=os.path.getmtime)
                 print(f"Selected run folder: {os.path.basename(run_folder)}")
 
-                data = extract_tensorboard_scalars(run_folder)
-                if not any('valid' in tag for tag in data.keys()):
-                    print("WARNING: No validation tags found in TensorBoard logs.")
-                    print("Run folder contents:")
-                    for root, dirs, files in os.walk(run_folder):
-                        level = root.replace(str(run_folder), '').count(os.sep)
-                        indent = ' ' * 2 * level
-                        print(f"{indent}{os.path.basename(root)}/")
-                        sub_indent = ' ' * 2 * (level + 1)
-                        for file in files:
-                            print(f"{sub_indent}{file}")
-                    raise RuntimeError(
-                        f"No validation TensorBoard tags found in {run_folder}. "
-                        f"Available tags: {list(data.keys())}. "
-                        "Check that NeuralHydrology is configured to log validation metrics to TensorBoard "
-                        "(config: log_tensorboard: true, validate_every: 1)."
-                    )
-
-                tag_nse_1d = find_tag(data, 'valid/mean_nse_1D')
-                tag_nse_1h = find_tag(data, 'valid/mean_nse_1h')
-
-                validation_NSE_scores_1d = np.array([loss for epoch, loss in data[tag_nse_1d]])
-                validation_NSE_scores_1h = np.array([loss for epoch, loss in data[tag_nse_1h]])
-                validation_NSE_scores_mean_1d_1h = (validation_NSE_scores_1d + validation_NSE_scores_1h) / 2
-
-                max_validation_NSE_score = float(np.max(validation_NSE_scores_mean_1d_1h))
-
-                for (epoch_nse_1d, loss_nse_1d), (epoch_nse_1h, loss_nse_1h) in zip(
-                    data[tag_nse_1d],
-                    data[tag_nse_1h],
-                ):
-                    mlflow.log_metric("val_nse_1d", float(loss_nse_1d), step=int(epoch_nse_1d))
-                    mlflow.log_metric("val_nse_1h", float(loss_nse_1h), step=int(epoch_nse_1h))
-                    mlflow.log_metric(
-                        "val_nse_1h_1d",
-                        (float(loss_nse_1d) + float(loss_nse_1h)) / 2,
-                        step=int(epoch_nse_1h),
-                    )
-
-                mlflow.log_metric("max_validation_nse_1d_1h", max_validation_NSE_score)
+                log_validation_metrics(run_folder)
                 mlflow.log_artifact(str(config_path), artifact_path="config")
 
 
