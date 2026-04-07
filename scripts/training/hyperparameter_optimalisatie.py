@@ -52,8 +52,6 @@ def get_run_folder_by_name_timestamp(trial_dir, experiment_name):
 def run_neural_hydrology_model(config_name):
     run_config = Config(Path(config_name))
     print('model:\t\t', run_config.model)
-    print('use_frequencies:', run_config.use_frequencies)
-    print('seq_length:\t', run_config.seq_length)
 
     # by default we assume that you have at least one CUDA-capable NVIDIA GPU
     if torch.cuda.is_available():
