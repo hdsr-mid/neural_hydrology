@@ -157,22 +157,25 @@ def load_config(config_path: Path):
     return config_dict, config_object
 
 
-def prepare_retrain_config(base_config_path: Path, trial_dir: Path, i_retrain: int):
+def prepare_retrain_config(base_config_path: Path, retrain_dir: Path, i_retrain: int):
     with open(base_config_path) as file:
         config = yaml.load(file, Loader=yaml.FullLoader)
 
+    seed = i_retrain + 1
     experiment_name = f"{TRIAL_NAME}_retrain_{i_retrain + 1}"
     config["experiment_name"] = experiment_name
-    config["run_dir"] = str(trial_dir)
+    config["run_dir"] = str(retrain_dir)
+    config["seed"] = seed
 
     for stale_path_key in ["img_log_dir", "train_dir"]:
         config.pop(stale_path_key, None)
 
-    retrain_config_path = trial_dir / f"config_retrain_{i_retrain + 1}.yml"
+    retrain_dir.mkdir(parents=True, exist_ok=True)
+    retrain_config_path = retrain_dir / f"config_retrain_{i_retrain + 1}.yml"
     with open(retrain_config_path, "w") as file:
         yaml.dump(config, file)
 
-    return retrain_config_path, experiment_name
+    return retrain_config_path, experiment_name, seed
 
 
 def main():
@@ -194,8 +197,6 @@ def main():
     print(f"Copied config experiment_name: {config_dict.get('experiment_name')}")
     print(f"Copied config model: {config_object.model}")
 
-    trial_dir = DESTINATION_DIR
-
     with mlflow.start_run(run_name=DESTINATION_DIR.name) as parent_run:
         mlflow.log_params(
             {
@@ -211,9 +212,10 @@ def main():
             log_validation_metrics(copied_run_dir)
 
         for i_retrain in range(NUMBER_OF_RETRAININGS):
-            config_path, experiment_name = prepare_retrain_config(
+            retrain_dir = DESTINATION_DIR / f"retrain_{i_retrain + 1}"
+            config_path, experiment_name, seed = prepare_retrain_config(
                 base_config_path=copied_config_path,
-                trial_dir=trial_dir,
+                retrain_dir=retrain_dir,
                 i_retrain=i_retrain,
             )
 
@@ -226,6 +228,7 @@ def main():
                     {
                         "retrain_index": i_retrain + 1,
                         "experiment_name": experiment_name,
+                        "seed": seed,
                     }
                 )
                 mlflow.log_artifact(str(config_path), artifact_path="config")
@@ -236,7 +239,7 @@ def main():
 
                 run_neural_hydrology_model(config_path)
 
-                folders_in_trial = [os.path.join(trial_dir, folder) for folder in os.listdir(trial_dir)]
+                folders_in_trial = [os.path.join(retrain_dir, folder) for folder in os.listdir(retrain_dir)]
                 folders_in_trial = [f for f in folders_in_trial if os.path.isdir(f)]
 
                 matching_folders = [
@@ -245,7 +248,7 @@ def main():
                 ]
                 if not matching_folders:
                     raise RuntimeError(
-                        f"No run folder found starting with '{experiment_name}_' in {trial_dir}. "
+                        f"No run folder found starting with '{experiment_name}_' in {retrain_dir}. "
                         f"Available folders: {[os.path.basename(f) for f in folders_in_trial]}"
                     )
                 run_folder = max(matching_folders, key=os.path.getmtime)
