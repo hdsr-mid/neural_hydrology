@@ -1,6 +1,6 @@
 import os
 os.environ["MLFLOW_TRACKING_URI"] = "databricks"
- 
+
 from pathlib import Path
 import yaml
 import torch
@@ -36,7 +36,7 @@ def run_neural_hydrology_model(config_name):
     # by default we assume that you have at least one CUDA-capable NVIDIA GPU
     if torch.cuda.is_available():
         start_run(config_file=Path(config_name))
-    
+
     # fall back to CPU-only mode
     else:
         start_run(config_file=Path(config_name), gpu=-1)
@@ -63,7 +63,7 @@ def find_tag(data, pattern):
         if tag.lower() == pattern_lower:
             return tag
     raise KeyError(f"No tag matching '{pattern}' found. Available tags: {list(data.keys())}")
-    
+
 def objective(trial):
     with mlflow.start_run(run_name=f"trial_{trial.number}", nested=True):
 
@@ -283,3 +283,4 @@ with mlflow.start_run(run_name=EXPERIMENT_NAME) as parent_run:
     mlflow.log_metric("best_value", study.best_value)
     mlflow.log_params({f"best/{k}": str(v) for k, v in study.best_trial.params.items()})
     mlflow.set_tag("best_trial_number", study.best_trial.number)
+ 
