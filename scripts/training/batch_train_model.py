@@ -19,15 +19,15 @@ import mlflow
 import numpy as np
 import datetime
 
-EXPERIMENT_NAME = "runs" #"LSTM_wonderful_williamson_20260407_124224"
+EXPERIMENT_NAME = "runs" # "LSTM_wonderful_williamson_20260407_124224"
 TRIAL_NAME = "trial_28"
-PATH_HPO = Path("/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output/HPO/runs")
+PATH_HPO = Path(f"/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output/HPO/{EXPERIMENT_NAME}")
 RETRAIN_NAME = "example_retrain"
 NUMBER_OF_RETRAININGS = 2
 
 RETRAIN_BASE_DIR = Path("/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output/BATCH_RETRAIN")
-DESTINATION_DIR = RETRAIN_BASE_DIR / f"RETRAIN_{TRIAL_NAME}_{RETRAIN_NAME}"
-MLFLOW_EXPERIMENT_NAME = f"/Shared/RETRAIN_{TRIAL_NAME}_{RETRAIN_NAME}"
+DESTINATION_DIR = RETRAIN_BASE_DIR / f"{TRIAL_NAME}_{RETRAIN_NAME}"
+MLFLOW_EXPERIMENT_NAME = f"/{TRIAL_NAME}_{RETRAIN_NAME}"
 
 mlflow.set_tracking_uri("databricks")
 mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
@@ -156,7 +156,7 @@ def main():
     with mlflow.start_run(run_name=DESTINATION_DIR.name) as parent_run:
         mlflow.log_params(
             {
-                "source_trial_name": TRIAL_NAM,
+                "source_trial_name": TRIAL_NAME,
                 "retrain_name": RETRAIN_NAME,
                 "number_of_retrainings": NUMBER_OF_RETRAININGS,
             }
