@@ -19,14 +19,15 @@ import mlflow
 import numpy as np
 import datetime
 
+EXPERIMENT_NAME = "runs" #"LSTM_wonderful_williamson_20260407_124224"
+TRIAL_NAME = "trial_28"
 PATH_HPO = Path("/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output/HPO/runs")
-TRIAL_NR = "trial_28"
-RETRAIN_NAME = "example"
+RETRAIN_NAME = "example_retrain"
 NUMBER_OF_RETRAININGS = 2
 
 RETRAIN_BASE_DIR = Path("/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output/BATCH_RETRAIN")
-DESTINATION_DIR = RETRAIN_BASE_DIR / f"RETRAIN_{TRIAL_NR}_{RETRAIN_NAME}"
-MLFLOW_EXPERIMENT_NAME = f"/Shared/RETRAIN_{TRIAL_NR}_{RETRAIN_NAME}"
+DESTINATION_DIR = RETRAIN_BASE_DIR / f"RETRAIN_{TRIAL_NAME}_{RETRAIN_NAME}"
+MLFLOW_EXPERIMENT_NAME = f"/Shared/RETRAIN_{TRIAL_NAME}_{RETRAIN_NAME}"
 
 mlflow.set_tracking_uri("databricks")
 mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
@@ -98,7 +99,7 @@ def copy_trial_folder(source_run_dir: Path, destination_dir: Path) -> Path:
     if destination_dir.exists():
         raise RuntimeError(
             f"Destination folder already exists: {destination_dir}. "
-            "Remove it first or change RETRAIN_NAME/TRIAL_NR."
+            "Remove it first or change RETRAIN_NAME/TRIAL_NAME."
         )
 
     destination_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -117,7 +118,7 @@ def prepare_retrain_config(base_config_path: Path, trial_dir: Path, i_retrain: i
     with open(base_config_path) as file:
         config = yaml.load(file, Loader=yaml.FullLoader)
 
-    experiment_name = f"{TRIAL_NR}_retrain_{RETRAIN_NAME}_{i_retrain + 1}"
+    experiment_name = f"{TRIAL_NAME}_retrain_{RETRAIN_NAME}_{i_retrain + 1}"
     config["experiment_name"] = experiment_name
     config["run_dir"] = str(trial_dir)
 
@@ -132,7 +133,7 @@ def prepare_retrain_config(base_config_path: Path, trial_dir: Path, i_retrain: i
 
 
 def main():
-    source_trial_dir = PATH_HPO / TRIAL_NR
+    source_trial_dir = PATH_HPO / TRIAL_NAME
     source_run_dir = resolve_source_run_dir(source_trial_dir)
 
     copied_run_dir = copy_trial_folder(source_run_dir, DESTINATION_DIR)
@@ -155,7 +156,7 @@ def main():
     with mlflow.start_run(run_name=DESTINATION_DIR.name) as parent_run:
         mlflow.log_params(
             {
-                "source_trial_nr": TRIAL_NR,
+                "source_trial_name": TRIAL_NAM,
                 "retrain_name": RETRAIN_NAME,
                 "number_of_retrainings": NUMBER_OF_RETRAININGS,
             }
