@@ -22,7 +22,7 @@ import datetime
 PATH_HPO = Path("/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output/HPO/runs")
 TRIAL_NR = "trial_28"
 RETRAIN_NAME = "example"
-NUMBER_OF_RETRAININGS = 3
+NUMBER_OF_RETRAININGS = 2
 
 RETRAIN_BASE_DIR = Path("/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output/BATCH_RETRAIN")
 DESTINATION_DIR = RETRAIN_BASE_DIR / f"RETRAIN_{TRIAL_NR}_{RETRAIN_NAME}"

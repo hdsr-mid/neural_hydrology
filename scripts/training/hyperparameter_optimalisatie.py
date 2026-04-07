@@ -4,8 +4,8 @@ os.environ["MLFLOW_TRACKING_URI"] = "databricks"
 from pathlib import Path
 import yaml
 import torch
-from neuralhydrology.nh_run import start_run
 from neuralhydrology.utils.config import Config
+from neuralhydrology.nh_run import start_run
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 import warnings
 warnings.filterwarnings("ignore", message="'H' is deprecated and will be removed in a future version")
@@ -14,18 +14,40 @@ import optuna
 import mlflow
 import numpy as np
 import datetime
+from names_generator import generate_name
+from collections import defaultdict
 
-EXPERIMENT_NAME = f"hdsr_lstm_optuna_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+NAME = generate_name()
+EXPERIMENT_NAME = f"LSTM_{NAME}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
 N_TRIALS = 50
 BASE_CONFIG = "/Workspace/Shared/neural_hydrology_fork/config.yml"
 OUTPUT_DIR = Path("/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output")
-RUNS_DIR = OUTPUT_DIR / "HPO/runs"
+RUNS_DIR = OUTPUT_DIR / f"HPO/{EXPERIMENT_NAME}"
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 os.chdir(OUTPUT_DIR)
 
 mlflow.set_tracking_uri("databricks")  # if running on Databricks this is often already configured
 mlflow.set_experiment(f"/Shared/{EXPERIMENT_NAME}")
 
+def get_run_folder_by_name_timestamp(trial_dir, experiment_name):
+    trial_dir = Path(trial_dir)
+
+    matching_dirs = [
+        p for p in trial_dir.iterdir()
+        if p.is_dir() and p.name.startswith(f"{experiment_name}_")
+    ]
+
+    if not matching_dirs:
+        raise RuntimeError(
+            f"No run folders found for '{experiment_name}_' in {trial_dir}"
+        )
+
+    def parse_run_time(folder: Path):
+        suffix = folder.name.removeprefix(f"{experiment_name}_")
+        return datetime.datetime.strptime(suffix, "%d%m_%H%M%S")
+
+    matching_dirs.sort(key=parse_run_time, reverse=True)
+    return matching_dirs[0]
 
 def run_neural_hydrology_model(config_name):
     run_config = Config(Path(config_name))
@@ -83,7 +105,6 @@ def objective(trial):
         config['hidden_size'] = 64
         # config['train_start_date'] = '01/01/2017'
         # config['epochs'] = 20
-
 
         # dropout, also apply to the embedding networks
         dropout = trial.suggest_categorical('dropout', [0.1, 0.2, 0.3, 0.4])
@@ -171,7 +192,6 @@ def objective(trial):
             + static_variables_infiltratie_permeabiliteit
         )
 
-
         config['static_attributes'] = static_variables
 
         # Save config inside the trial folder
@@ -194,25 +214,10 @@ def objective(trial):
         # draai het model met de nieuwe config
         run_neural_hydrology_model(config_path)
 
-        # Find the run output folder inside this trial's directory
-        folders_in_trial = [os.path.join(trial_dir, folder) for folder in os.listdir(trial_dir)]
-
-        # Filter only directories
-        folders_in_trial = [f for f in folders_in_trial if os.path.isdir(f)]
-
-        # Match on experiment_name + '_' to avoid partial prefix collisions
-        # Then take the most recently modified folder in case multiple matches exist
-        matching_folders = [
-            f for f in folders_in_trial
-            if os.path.basename(f).startswith(experiment_name + '_')
-        ]
-        if not matching_folders:
-            raise RuntimeError(
-                f"No run folder found starting with '{experiment_name}_' in {trial_dir}. "
-                f"Available folders: {[os.path.basename(f) for f in folders_in_trial]}"
-            )
-        run_folder = max(matching_folders, key=os.path.getmtime)
-        print(f"Selected run folder: {os.path.basename(run_folder)}")
+        run_folder = get_run_folder_by_name_timestamp(
+            trial_dir=trial_dir,
+            experiment_name=experiment_name,
+        )
 
         # now we need to log the metric we want to optimize from the neural hydrology model using the latest folder
         # we optimize the hyperparameters to maximize the mean NSE score
@@ -259,28 +264,28 @@ def objective(trial):
     return max_validation_NSE_score
 
 
-study = optuna.create_study(
-    direction='maximize',
-    study_name=EXPERIMENT_NAME,
-    storage=f'sqlite:////local_disk0/tmp/{EXPERIMENT_NAME}.db',
-    load_if_exists=True
-)
+if __name__ == "__main__":
+    study = optuna.create_study(
+        direction='maximize',
+        study_name=EXPERIMENT_NAME,
+        storage=f'sqlite:////local_disk0/tmp/{EXPERIMENT_NAME}.db',
+        load_if_exists=True
+    )
 
+    with mlflow.start_run(run_name=EXPERIMENT_NAME) as parent_run:
+        mlflow.set_tag("study_name", EXPERIMENT_NAME)
 
-with mlflow.start_run(run_name=EXPERIMENT_NAME) as parent_run:
-    mlflow.set_tag("study_name", EXPERIMENT_NAME)
+        study.optimize(objective, n_trials=N_TRIALS)
 
-    study.optimize(objective, n_trials=N_TRIALS)
+        importances = optuna.importance.get_param_importances(study)
+        mlflow.log_dict(importances, "optuna/param_importances.json")
 
-    importances = optuna.importance.get_param_importances(study)
-    mlflow.log_dict(importances, "optuna/param_importances.json")
+        fig = optuna.visualization.plot_param_importances(study)
+        mlflow.log_figure(fig, "optuna/param_importances.html")
 
-    fig = optuna.visualization.plot_param_importances(study)
-    mlflow.log_figure(fig, "optuna/param_importances.html")
-
-    hist_fig = optuna.visualization.plot_optimization_history(study)
-    mlflow.log_figure(hist_fig, "optuna/optimization_history.html")
-    mlflow.log_metric("best_value", study.best_value)
-    mlflow.log_params({f"best/{k}": str(v) for k, v in study.best_trial.params.items()})
-    mlflow.set_tag("best_trial_number", study.best_trial.number)
+        hist_fig = optuna.visualization.plot_optimization_history(study)
+        mlflow.log_figure(hist_fig, "optuna/optimization_history.html")
+        mlflow.log_metric("best_value", study.best_value)
+        mlflow.log_params({f"best/{k}": str(v) for k, v in study.best_trial.params.items()})
+        mlflow.set_tag("best_trial_number", study.best_trial.number)
  
