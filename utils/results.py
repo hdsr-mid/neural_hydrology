@@ -1,11 +1,17 @@
+import math
+import tempfile
+import warnings
 from pathlib import Path
+from typing import List
 
 import numpy as np
+import yaml
 from neuralhydrology.evaluation import get_tester
 from neuralhydrology.utils.config import Config
 import pandas as pd
 import plotly.graph_objects as go
 import xarray as xr
+from plotly.subplots import make_subplots
 
 
 def evaluate(
@@ -13,7 +19,8 @@ def evaluate(
         period: str,
         basin: str,
         time_resolution: str,
-        netcdf_output_file: Path
+        netcdf_output_file: Path,
+        config_overrides: dict = None,
 ) -> None:
     """
     Evaluate the model for the given run directory and period, and save results to a NetCDF file.
@@ -24,11 +31,33 @@ def evaluate(
         run_dir (str | pathlib.Path): Path to the run directory containing ``config.yml``.
         period (str): Evaluation split; must be ``"train"`` or ``"test"``.
         basin (str): Basin identifier used to select the basin-specific results.
-        time_resolution (str): Temporal resolution key ("1h" or "1d") used to select results.
+        time_resolution (str): Temporal resolution key ("1h" or "1D") used to select results.
         netcdf_output_file (pathlib.Path): Output path for the resulting NetCDF file.
     """
+    config_overrides = config_overrides or {}
     run_dir = Path(run_dir)
-    config = Config(run_dir / "config.yml")
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as temp_basin_file:
+        temp_basin_file.write(basin)
+        temp_basin_file.flush()
+        temp_basin_file_path = temp_basin_file.name
+
+    config_overrides["test_basin_file"] = temp_basin_file_path
+    config_overrides["train_basin_file"] = temp_basin_file_path
+    config_overrides["validation_basin_file"] = temp_basin_file_path
+
+    with open(run_dir / "config.yml") as config:
+        config_yaml = yaml.safe_load(config)
+
+    for key, value in config_overrides.items():
+        config_yaml[key] = value
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as temp_config:
+        yaml.dump(config_yaml, temp_config)
+        temp_config.flush()
+        temp_config_path = Path(temp_config.name)
+        config = Config(temp_config_path)
+
     model = get_tester(cfg=config, run_dir=run_dir, period=period, init_model=True)
     results = model.evaluate(save_results=True, metrics=config.metrics)
     results_xr_dataset: xr.Dataset = results[basin][time_resolution]["xr"]
@@ -43,12 +72,45 @@ def evaluate(
     results_xr_dataset = results_xr_dataset.set_index({"datetime": "datetime"})
     results_xr_dataset = results_xr_dataset.drop_vars(['date', 'time_step'])
     results_xr_dataset.to_netcdf(netcdf_output_file)
+    temp_config_path.unlink()
+    Path(temp_basin_file_path).unlink()
 
 
-def weekly_totals(netcdf_path: Path, area: float):
+def weekly_totals_from_netcdf(
+        netcdf_path: Path,
+        area: float,
+        variable: str,
+) -> pd.DataFrame:
+    """
+    Also converts from m/s to m3/h
+    """
     ds = xr.open_dataset(netcdf_path)
-    df = ds["afvoer"].to_dataframe()
+    df = ds[variable].to_dataframe()
     df = df * area * 3600  # m/s -> m3/h
+    df_weekly = df.resample('W').sum()
+    return df_weekly
+
+
+def weekly_totals_from_csv(
+        csv_path: Path,
+        area: float,
+        variable: str,
+):
+    """
+    Also converts from m3/s to m3/h
+    """
+    df = pd.read_csv(
+        csv_path,
+        sep=",",
+        usecols=["datetime", variable],
+        parse_dates=["datetime"],
+        dayfirst=True  # important for DD/MM/YYYY
+    )
+
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df = df.set_index("datetime")
+    df[variable] = (df[variable] * 3600).astype(float)
+    df[variable] = df[variable].astype(float)
     df_weekly = df.resample('W').sum()
     return df_weekly
 
@@ -82,46 +144,169 @@ def get_overlap(
     return overlap
 
 
-def qq_plot(df: pd.DataFrame, xcol: str, ycol: str):
-    # Determine axis limits (same for x and y)
+def find_discharge_file_by_code(folder: Path, code) -> Path | None:
+    folder = Path(folder)
+
+    for file in folder.glob("*.csv"):
+        parts = file.stem.split("_")
+        if code in parts:
+            return file
+
+    return None
+
+
+def mean_sim_per_measured_quantile(x, y, n_quantiles):
+    """
+    Compute average simulated discharge per measured quantile.
+
+    Parameters
+    ----------
+    x : array-like
+        Measured discharge (x-axis)
+    y : array-like
+        Simulated discharge (y-axis)
+    n_quantiles : int
+        Number of quantile bins
+
+    Returns
+    -------
+    x_mean : ndarray
+        Mean measured value per quantile
+    y_mean : ndarray
+        Mean simulated value per quantile
+    """
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    # Quantile edges in measured space
+    q_edges = np.quantile(x, np.linspace(0, 1, n_quantiles + 1))
+
+    x_mean = []
+    y_mean = []
+
+    for lo, hi in zip(q_edges[:-1], q_edges[1:]):
+        mask = (x >= lo) & (x <= hi)
+        if np.any(mask):
+            x_mean.append(x[mask].mean())
+            y_mean.append(y[mask].mean())
+
+    return np.array(x_mean), np.array(y_mean)
+
+
+def qq_plot_subplot(
+    fig: go.Figure,
+    df: pd.DataFrame,
+    xcol: str,
+    ycol: str,
+    row: int,
+    col: int,
+    ncols: int,
+):
+    # determine axis limits
     min_val = min(df[xcol].min(), df[ycol].min())
     max_val = max(df[xcol].max(), df[ycol].max())
 
-    fig = go.Figure()
+    # scatter points
+    fig.add_trace(
+        go.Scatter(
+            x=df[xcol],
+            y=df[ycol],
+            mode="markers",
+            marker=dict(size=6, color="blue", opacity=0.4),
+            showlegend=False
+        ),
+        row=row,
+        col=col
+    )
 
-    # Scatter points
-    fig.add_trace(go.Scatter(
-        x=df[xcol],
-        y=df[ycol],
-        mode="markers",
-        name="Weektotaal afvoer [m3]",
-        marker=dict(size=6, color="blue", opacity=0.7)
-    ))
+    # x = y line
+    fig.add_trace(
+        go.Scatter(
+            x=[min_val, max_val],
+            y=[min_val, max_val],
+            mode="lines",
+            line=dict(color="black", width=1, dash="dot"),
+            showlegend=False
+        ),
+        row=row,
+        col=col
+    )
 
-    # Diagonal line: x = y
-    fig.add_trace(go.Scatter(
-        x=[min_val, max_val],
-        y=[min_val, max_val],
-        mode="lines",
-        name="x=y",
-        line=dict(color="black", width=2, dash="dot")
-    ))
+    # quantile-mean line
+    x_q, y_q = mean_sim_per_measured_quantile(
+        x=df[xcol], y=df[ycol], n_quantiles=10
+    )
 
-    # Axis settings (equal spacing)
+    fig.add_trace(
+        go.Scatter(
+            x=x_q,
+            y=y_q,
+            mode="lines+markers",
+            line=dict(color="red", width=2),
+            marker=dict(size=6),
+            showlegend=False,
+        ),
+        row=row, col=col
+    )
+
+    # axis settings
+    fig.update_xaxes(
+        range=[0, max_val],
+        title_text=xcol,
+        row=row,
+        col=col,
+    )
+
+    fig.update_yaxes(
+        range=[0, max_val],
+        scaleanchor=f"x{(row - 1) * ncols + col}",
+        scaleratio=1,
+        title_text=ycol,
+        row=row,
+        col=col,
+    )
+
+
+def qq_plots(
+        dataframes: List[pd.DataFrame],
+        titles: List[str],
+        xcol: str,
+        ycol: str,
+):
+
+    n_plots = len(dataframes)
+
+    max_cols = 4
+    n_cols = min(max_cols, n_plots)
+    n_rows = math.ceil(n_plots / n_cols)
+
+    fig = make_subplots(
+        rows=n_rows,
+        cols=n_cols,
+        horizontal_spacing=0.03,
+        vertical_spacing=0.04,
+        subplot_titles=titles
+    )
+
+    for i, df in enumerate(dataframes):
+        row = i // n_cols + 1
+        col = i % n_cols + 1
+
+        qq_plot_subplot(
+            fig,
+            df,
+            xcol=xcol,
+            ycol=ycol,
+            row=row,
+            col=col,
+            ncols=n_cols,
+        )
+
     fig.update_layout(
-        xaxis=dict(
-            scaleanchor="y",  # makes axes use same scale
-            scaleratio=1,
-            range=[min_val, max_val],
-            title=xcol
-        ),
-        yaxis=dict(
-            range=[min_val, max_val],
-            title=ycol
-        ),
-        # width=700,
-        # height=700,
-        title="Q/Q plot"
+        width=600 * n_cols,
+        height=600 * n_rows,
+        title="Weekly Discharge Q–Q Plots",
+        showlegend=False
     )
 
     fig.show()
@@ -155,20 +340,75 @@ def dummy_dataset():
 
 
 if __name__ == "__main__":
-    # basin = "AFVG13"
-    # data_dir = Path(__file__).parent.parent / "data" / "time_series"
-    # area = get_area(basin=basin)
-    # input_weekly_totals = weekly_totals(netcdf_path=data_dir / f"{basin}.nc", area=area)
-    #
-    # run_dir = "C:/Users/leendert.vanwolfswin/Documents/hdsr/development_run_2103_053442/development_run_2103_053442"
-    # netcdf_output_dir = Path("C:/Users/leendert.vanwolfswin/Documents/hdsr/development_run_2103_053442/development_run_2103_053442/netcdf/")
-    # netcdf_output_dir.mkdir(parents=True, exist_ok=True)
-    # netcdf_output = netcdf_output_dir / f"simulation_output_{basin}.nc"
-    # evaluate(run_dir=run_dir, period="test", basin=basin, time_resolution="h", netcdf_output_file=netcdf_output_dir / f"simulation_output_{basin}.nc")
-    #
-    # output_weekly_totals = weekly_totals(netcdf_path=netcdf_output, area=area)
 
-    dummy = dummy_dataset()
-    qq_plot(df=dummy, xcol="measured", ycol="simulated")
+    run_dir = "C:/Users/leendert.vanwolfswin/Documents/hdsr/runs/runs/development_run_23_2503_122253"
+    netcdf_output_dir = Path(run_dir) / "netcdf"
+    netcdf_output_dir.mkdir(parents=True, exist_ok=True)
+    data_dir = Path(__file__).parent.parent / "data"
+    raw_discharges_dir = data_dir / "raw_discharge_data"
+    measured_variable_name = "debiet_x_IB"
+    basins = ["AFVG13", "AFVG15"]
+    basins_file = data_dir / "hdsr_polders.txt"
+    with basins_file.open("r") as f:
+        lines = f.readlines()
+        basins = [line.strip() for line in lines]
+    print(basins)
+
+    # # NetCDFs maken per polder
+    # for basin in basins:
+    #     netcdf_output = netcdf_output_dir / f"simulation_output_{basin}.nc"
+    #     evaluate(
+    #         run_dir=run_dir,
+    #         period="test",
+    #         basin=basin,
+    #         time_resolution="1h",
+    #         netcdf_output_file=netcdf_output,
+    #         config_overrides={
+    #             "device": "cpu",
+    #             "data_dir": str(data_dir),
+    #         }
+    #     )
+
+    weekly_totals_dfs = []
+    for basin in basins:
+        area = get_area(basin=basin)
+        csv_path = find_discharge_file_by_code(folder=raw_discharges_dir, code=basin)
+        if csv_path is None:
+            warnings.warn(f"CSV voor {basin} niet gevonden!")
+            continue
+
+        input_weekly_totals = weekly_totals_from_csv(
+            csv_path=csv_path,
+            area=area,
+            variable=measured_variable_name
+        )
+        output_weekly_totals = weekly_totals_from_netcdf(
+            netcdf_path= netcdf_output_dir / f"simulation_output_{basin}.nc",
+            area=area,
+            variable="afvoer_sim"
+        )
+        weekly_totals_joined = input_weekly_totals.join(
+            output_weekly_totals,
+            how="inner"  # inner join keeps only weeks present in both
+        )
+        weekly_totals_joined.rename(
+            columns={
+                measured_variable_name: "measured",
+                "afvoer_sim": "simulated"
+            },
+            inplace=True
+        )
+        if len(weekly_totals_joined) == 0:
+            warnings.warn(f"Geen overlappende weken gevonden voor {basin}")
+            continue
+
+        weekly_totals_dfs.append(weekly_totals_joined)
+
+    qq_plots(
+        dataframes=weekly_totals_dfs,
+        xcol="measured",
+        ycol="simulated",
+        titles=basins,
+    )
 
     print("Klaar")
