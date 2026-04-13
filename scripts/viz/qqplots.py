@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import xarray as xr
 
-from utils.results import evaluate
+# from utils.results import evaluate
 
 DISCHARGE_CSV_COL_NAMES = {
     "gemaal": "debiet_x_IB",
@@ -283,10 +283,9 @@ def dummy_dataset():
 
 if __name__ == "__main__":
 
-    run_dir = "C:/Users/leendert.vanwolfswin/Documents/hdsr/runs/runs/development_run_23_2503_122253"
-    netcdf_output_dir = Path(run_dir) / "netcdf"
-    netcdf_output_dir.mkdir(parents=True, exist_ok=True)
-    data_dir = Path(__file__).parent.parent.parent / "data"
+    run_dir = Path(r"C:\Users\christiaan.wewer\Documents\projecten\hdsr_lstm_2026_1\code\neural_hydrology\scripts\analysis\visualisatie_chris_meeting\runs\development_run_33_1004_025034")
+    netcdf_output_dir = Path(r"C:\Users\christiaan.wewer\Documents\projecten\hdsr_lstm_2026_1\code\neural_hydrology\scripts\analysis\visualisatie_chris_meeting\results_netcdf")
+    data_dir = Path(r"C:\Users\christiaan.wewer\Documents\projecten\hdsr_lstm_2026_1\code\neural_hydrology\data")
     raw_discharges_dir = data_dir / "raw_discharge_data"
     basins_file = data_dir / "hdsr_polders.txt"
     with basins_file.open("r") as f:
@@ -296,19 +295,19 @@ if __name__ == "__main__":
     print(basins)
 
     # NetCDFs maken per polder
-    for basin in basins:
-        netcdf_output = netcdf_output_dir / f"simulation_output_{basin}.nc"
-        evaluate(
-            run_dir=run_dir,
-            period="test",
-            basin=basin,
-            time_resolution="1h",
-            netcdf_output_file=netcdf_output,
-            config_overrides={
-                "device": "cpu",
-                "data_dir": str(data_dir),
-            }
-        )
+    # for basin in basins:
+    #     netcdf_output = netcdf_output_dir / f"simulation_output_{basin}.nc"
+        # evaluate(
+        #     run_dir=run_dir,
+        #     period="test",
+        #     basin=basin,
+        #     time_resolution="1h",
+        #     netcdf_output_file=netcdf_output,
+        #     config_overrides={
+        #         "device": "cpu",
+        #         "data_dir": str(data_dir),
+        #     }
+        # )
 
     weekly_totals_dfs = []
     titles = []
@@ -317,6 +316,7 @@ if __name__ == "__main__":
             pass
         area = get_area(basin=basin)
         csv_path, structure_type = find_discharge_file_by_code(folder=raw_discharges_dir, code=basin)
+                
         if csv_path is None:
             warnings.warn(f"CSV voor {basin} niet gevonden!")
             continue
