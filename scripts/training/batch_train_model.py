@@ -165,7 +165,7 @@ def prepare_retrain_config(base_config_path: Path, retrain_dir: Path, i_retrain:
     experiment_name = f"{TRIAL_NAME}_retrain_{i_retrain + 1}"
     config["experiment_name"] = experiment_name
     config["run_dir"] = str(retrain_dir)
-    config["seed"] = seed
+    config["seed"] = config["seed"] + seed
 
     for stale_path_key in ["img_log_dir", "train_dir"]:
         config.pop(stale_path_key, None)
