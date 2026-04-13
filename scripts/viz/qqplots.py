@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import xarray as xr
 
+from utils.attributes import get_area
 from utils.results import evaluate
 
 DISCHARGE_CSV_COL_NAMES = {
@@ -55,16 +56,6 @@ def weekly_totals_from_csv(
     df[variable] = df[variable].astype(float)
     df_weekly = df.resample('W').sum()
     return df_weekly
-
-
-def get_area(basin: str) -> float:
-    """Get the area of given `basin` from the static attributes csv"""
-    csv_path = Path(__file__).parent.parent.parent / "data" / "attributes" / "polders_data_aangevuld.csv"
-    df = pd.read_csv(csv_path)
-    row = df.loc[df["SHAPE_ID"] == basin, "oppervlak"]
-    if row.empty:
-        return None
-    return row.iloc[0]
 
 
 def get_overlap(
@@ -295,20 +286,20 @@ if __name__ == "__main__":
     # basins = ["AFVG41"]
     print(basins)
 
-    # NetCDFs maken per polder
-    for basin in basins:
-        netcdf_output = netcdf_output_dir / f"simulation_output_{basin}.nc"
-        evaluate(
-            run_dir=run_dir,
-            period="test",
-            basin=basin,
-            time_resolution="1h",
-            netcdf_output_file=netcdf_output,
-            config_overrides={
-                "device": "cpu",
-                "data_dir": str(data_dir),
-            }
-        )
+    # # NetCDFs maken per polder
+    # for basin in basins:
+    #     netcdf_output = netcdf_output_dir / f"simulation_output_{basin}.nc"
+    #     evaluate(
+    #         run_dir=run_dir,
+    #         period="test",
+    #         basin=basin,
+    #         time_resolution="1h",
+    #         netcdf_output_file=netcdf_output,
+    #         config_overrides={
+    #             "device": "cpu",
+    #             "data_dir": str(data_dir),
+    #         }
+    #     )
 
     weekly_totals_dfs = []
     titles = []
