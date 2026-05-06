@@ -8,6 +8,8 @@ data/time_series/*.nc
 runs/
 *.pt
 *.log
+data_ens/
+*.env
 
 # Python cache en temporary files
 __pycache__/
