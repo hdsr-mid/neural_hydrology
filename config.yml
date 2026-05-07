@@ -1,9 +1,10 @@
-batch_size: 256
+batch_size: 512
 clip_gradient_norm: 1
 cache_validation_data: true
 clip_targets_to_zero: 
 - afvoer
-data_dir: ../../data
+# data_dir: ../../data
+data_dir: /Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input
 dataset: generic
 device: cuda:0 # of cpu
 dynamic_inputs:
@@ -24,28 +25,23 @@ dynamic_inputs:
   - u
   - v
 dynamics_embedding:
-  activation: tanh
-  dropout: 0.2
+  activation: linear
+  dropout: 0
   hiddens:
-  - 16
   - 16
   type: fc
 epochs: 75
 experiment_name: development_run
 head: regression
-hidden_size: 128
+hidden_size: 64
 initial_forget_bias: 3
 learning_rate:
   0: 0.001
-log_interval: 5
-log_n_figures: 5
+log_interval: 1
 log_tensorboard: true
-loss: RMSE
+loss: MSE
 metrics:
 - NSE
-- KGE
-- Alpha-NSE
-- Beta-NSE
 model: mtslstm
 optimizer: Adam
 output_activation: linear
@@ -55,7 +51,7 @@ predict_last_n:
   1h: 24
 save_train_data: false
 save_validation_results: true
-save_weights_every: 5
+save_weights_every: 1
 seq_length:
   1D: 365
   1h: 336
@@ -75,27 +71,29 @@ static_attributes:
 - kwelmean
 - peil_range
 statics_embedding:
-  activation: tanh
-  dropout: 0.2
+  activation: linear
+  dropout: 0
   hiddens:
-  - 16
   - 16
   type: fc
 target_noise_std: 0
 target_variables:
 - afvoer
-test_basin_file: ../../data/hdsr_polders.txt
+# test_basin_file: ../../data/hdsr_polders.txt
+test_basin_file: /Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input/hdsr_polders.txt
 test_end_date: 01/01/2023
 test_start_date: 01/01/2021
-train_basin_file: ../../data/hdsr_polders.txt
-train_end_date: 01/01/2020
+# train_basin_file: ../../data/hdsr_polders.txt
+train_basin_file: /Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input/hdsr_polders.txt
+train_end_date: 01/01/2019
 train_start_date: 01/01/2014
 use_basin_id_encoding: false
 use_frequencies:
 - 1D
 - 1h
-validate_every: 5
-validate_n_random_basins: 41
-validation_basin_file: ../../data/hdsr_polders.txt
+validate_every: 1
+validate_n_random_basins: 9999
+# validation_basin_file: ../../data/hdsr_polders.txt
+validation_basin_file: /Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input/hdsr_polders.txt
 validation_end_date: 01/01/2021
-validation_start_date: 01/01/2020
+validation_start_date: 01/01/2019

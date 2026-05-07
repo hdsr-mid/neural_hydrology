@@ -1,33 +1,186 @@
-# Loop over all runs and get best run based on NSE_1h
-# best_run = None
-
-import pandas as pd
+import os
+import tempfile
 from pathlib import Path
 
-# Get all runs and order by file creation time
-runs = sorted([d for d in Path("runs").iterdir() if d.is_dir()], key=lambda x: x.stat().st_ctime)
+import mlflow
+import numpy as np
+import torch
+import yaml
+from mlflow import MlflowClient
+from neuralhydrology.nh_run import start_run
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
-for run in runs:
-    if run.is_dir():
-        try:
-            test_metrics = pd.read_csv(run / "test/model_epoch100/test_metrics.csv")
-            # print name of file and statistics of column NSE_1h
-            print(f"{run}: {test_metrics['NSE_1h'].describe()}")
-        except FileNotFoundError:
-            try:
-                test_metrics = pd.read_csv(run / "test/model_epoch075/test_metrics.csv")
-                # print name of file and statistics of column NSE_1h
-                print(f"{run}: {test_metrics['NSE_1h'].describe()}")
-            except FileNotFoundError:
-                try:
-                    test_metrics = pd.read_csv(run / "test/model_epoch005/test_metrics.csv")
-                    # print name of file and statistics of column NSE_1h
-                    print(f"{run}: {test_metrics['NSE_1h'].describe()}")
-                except FileNotFoundError:
-                    print(f"File not found in {run}")
-                    continue
-        except FileNotFoundError:
-            print(f"File not found in {run}")
-            continue
 
-#%%
+os.environ["MLFLOW_TRACKING_URI"] = "databricks"
+
+
+# Notebook-style options: edit these values before running the file.
+PROJECT_ROOT = Path("/Workspace/Shared/neural_hydrology_fork")
+SOURCE_EXPERIMENT_NAME = "/Shared/hdsr_lstm_optuna_20260319_120530"
+SOURCE_TRIAL_NUMBER = 0
+SEEDS = [0, 1, 2, 3, 4]
+OUTPUT_EXPERIMENT_NAME = f"{SOURCE_EXPERIMENT_NAME}_best_model"
+RUNS_DIR = PROJECT_ROOT / "runs"
+CONFIG_DIR = PROJECT_ROOT / "configs_best_model"
+
+
+RUNS_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def normalize_experiment_name(experiment_name: str) -> str:
+    if experiment_name.startswith("/"):
+        return experiment_name
+    return f"/Shared/{experiment_name}"
+
+
+def extract_tensorboard_scalars(logdir: Path) -> dict[str, list[tuple[int, float]]]:
+    event_acc = EventAccumulator(str(logdir))
+    event_acc.Reload()
+
+    scalars = {}
+    for tag in event_acc.Tags()["scalars"]:
+        scalars[tag] = [(event.step, event.value) for event in event_acc.Scalars(tag)]
+    return scalars
+
+
+def run_neural_hydrology_model(config_path: Path) -> None:
+    if torch.cuda.is_available():
+        start_run(config_file=config_path)
+    else:
+        start_run(config_file=config_path, gpu=-1)
+
+
+def get_trial_run(client: MlflowClient, experiment_id: str, trial_number: int):
+    runs = client.search_runs(
+        experiment_ids=[experiment_id],
+        filter_string=f"attributes.run_name = 'trial_{trial_number}'",
+        max_results=1,
+    )
+    if not runs:
+        raise RuntimeError(f"Could not find MLflow run for trial_{trial_number}.")
+    return runs[0]
+
+
+def find_config_artifact(client: MlflowClient, run_id: str) -> str:
+    artifact_infos = client.list_artifacts(run_id, "config")
+    yaml_artifacts = [
+        artifact.path for artifact in artifact_infos if artifact.path.endswith((".yml", ".yaml"))
+    ]
+    if not yaml_artifacts:
+        raise RuntimeError(f"No YAML config artifact found under 'config' for run {run_id}.")
+    if len(yaml_artifacts) > 1:
+        raise RuntimeError(f"Expected one config artifact, found {len(yaml_artifacts)} for run {run_id}.")
+    return yaml_artifacts[0]
+
+
+def load_trial_config(client: MlflowClient, run_id: str) -> dict:
+    artifact_path = find_config_artifact(client, run_id)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        local_config_path = Path(
+            mlflow.artifacts.download_artifacts(
+                run_id=run_id,
+                artifact_path=artifact_path,
+                dst_path=tmp_dir,
+            )
+        )
+        with open(local_config_path) as file:
+            return yaml.load(file, Loader=yaml.FullLoader)
+
+
+def get_run_folder(experiment_prefix: str) -> Path:
+    matching_runs = [
+        run_dir for run_dir in RUNS_DIR.iterdir() if run_dir.is_dir() and run_dir.name.startswith(experiment_prefix)
+    ]
+    if not matching_runs:
+        raise RuntimeError(f"No NH run folder found for experiment name prefix '{experiment_prefix}'.")
+    return max(matching_runs, key=lambda path: path.stat().st_ctime)
+
+
+def log_validation_metrics(run_folder: Path) -> float:
+    data = extract_tensorboard_scalars(run_folder)
+    validation_nse_scores_1d = np.array([loss for _, loss in data["valid/mean_nse_1d"]])
+    validation_nse_scores_1h = np.array([loss for _, loss in data["valid/mean_nse_1h"]])
+    validation_nse_scores_mean = (validation_nse_scores_1d + validation_nse_scores_1h) / 2
+    max_validation_nse_score = float(np.max(validation_nse_scores_mean))
+
+    for (epoch_nse_1d, loss_nse_1d), (epoch_nse_1h, loss_nse_1h) in zip(
+        data["valid/mean_nse_1d"],
+        data["valid/mean_nse_1h"],
+    ):
+        mlflow.log_metric("val_nse_1d", float(loss_nse_1d), step=int(epoch_nse_1d))
+        mlflow.log_metric("val_nse_1h", float(loss_nse_1h), step=int(epoch_nse_1h))
+        mlflow.log_metric(
+            "val_nse_1h_1d",
+            (float(loss_nse_1d) + float(loss_nse_1h)) / 2,
+            step=int(epoch_nse_1h),
+        )
+
+    mlflow.log_metric("max_validation_nse_1d_1h", max_validation_nse_score)
+    return max_validation_nse_score
+
+
+def train_repeat(source_experiment_basename: str, trial_number: int, seed: int, base_config: dict) -> None:
+    config = dict(base_config)
+    repeat_experiment_name = f"{source_experiment_basename}_trial_{trial_number}_seed_{seed}"
+    config["experiment_name"] = repeat_experiment_name
+    config["run_dir"] = str(RUNS_DIR)
+    config["seed"] = seed
+
+    config_path = CONFIG_DIR / f"{repeat_experiment_name}.yml"
+    with open(config_path, "w") as file:
+        yaml.dump(config, file)
+
+    with mlflow.start_run(run_name=f"seed_{seed}", nested=True):
+        mlflow.log_param("source_experiment_name", source_experiment_basename)
+        mlflow.log_param("source_trial_number", trial_number)
+        mlflow.log_param("seed", seed)
+        mlflow.log_artifact(str(config_path), artifact_path="config")
+
+        run_neural_hydrology_model(config_path)
+        run_folder = get_run_folder(repeat_experiment_name)
+        log_validation_metrics(run_folder)
+        mlflow.log_param("nh_run_folder", str(run_folder))
+
+
+def validate_settings() -> tuple[str, str]:
+    normalized_source_experiment_name = normalize_experiment_name(SOURCE_EXPERIMENT_NAME)
+    normalized_output_experiment_name = normalize_experiment_name(OUTPUT_EXPERIMENT_NAME)
+
+    if SOURCE_TRIAL_NUMBER is None:
+        raise RuntimeError("Set SOURCE_TRIAL_NUMBER at the top of the file before running.")
+    if not SEEDS:
+        raise RuntimeError("Set at least one seed in SEEDS before running.")
+
+    return normalized_source_experiment_name, normalized_output_experiment_name
+
+
+def main() -> None:
+    normalized_source_experiment_name, normalized_output_experiment_name = validate_settings()
+    source_experiment_basename = normalized_source_experiment_name.split("/")[-1]
+
+    mlflow.set_tracking_uri("databricks")
+    client = MlflowClient()
+
+    experiment = client.get_experiment_by_name(normalized_source_experiment_name)
+    if experiment is None:
+        raise RuntimeError(f"MLflow experiment '{normalized_source_experiment_name}' not found.")
+
+    trial_run = get_trial_run(client, experiment.experiment_id, SOURCE_TRIAL_NUMBER)
+    trial_config = load_trial_config(client, trial_run.info.run_id)
+    if not isinstance(trial_config, dict):
+        raise RuntimeError(f"Expected dict-like YAML config, got {type(trial_config).__name__}.")
+
+    mlflow.set_experiment(normalized_output_experiment_name)
+    with mlflow.start_run(run_name=f"best_model_trial_{SOURCE_TRIAL_NUMBER}") as parent_run:
+        mlflow.log_param("source_experiment_name", normalized_source_experiment_name)
+        mlflow.log_param("source_trial_number", SOURCE_TRIAL_NUMBER)
+        mlflow.log_param("source_run_id", trial_run.info.run_id)
+        mlflow.log_param("runs_dir", str(RUNS_DIR))
+        mlflow.set_tag("rerun_type", "best_model_retrain")
+
+        for seed in SEEDS:
+            train_repeat(source_experiment_basename, SOURCE_TRIAL_NUMBER, seed, trial_config)
+
+
+main()
