@@ -18,25 +18,14 @@ from rasterio.transform import from_origin
 
 import xarray as xr
 
+from dotenv import dotenv_values
+
 from neural_hydrology.scripts.preprocessing.meteo.knmi_open_data import KnmiOpenDataClient, KnmiRequestBudgetExceeded
 
 LOGGER = logging.getLogger(__name__)
 
 MAX_API_REQUESTS_PER_RUN = 100
 HARMONIE_VERSION = "1.0"
-
-
-def _load_env(path: Path) -> dict[str, str]:
-    env: dict[str, str] = {}
-    if not path.exists():
-        return env
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        env[k.strip()] = v.strip()
-    return env
 
 
 def _knmi_latest_filenames(client: KnmiOpenDataClient, *, dataset: str, n: int, version: str = HARMONIE_VERSION) -> list[str]:
@@ -245,7 +234,7 @@ def load_harmonie_ensemble_forecast_by_basin() -> dict[str, dict[str, object]]:
     tmp_dir = data_dir / "_tmp_harmonie"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    env = _load_env(nh_root / ".env")
+    env = dotenv_values(nh_root / ".env")
     client = KnmiOpenDataClient.from_neural_hydrology_env().with_request_budget(max_requests=MAX_API_REQUESTS_PER_RUN)
 
     # ENSEMBLE settings:

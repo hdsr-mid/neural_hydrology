@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from dotenv import dotenv_values
+
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_MAX_REQUESTS_PER_RUN = 100
@@ -26,19 +28,6 @@ class KnmiRequestBudgetExceeded(RuntimeError):
         self.attempted_request_no = int(attempted_request_no)
 
 
-def load_env_file(path: Path) -> dict[str, str]:
-    env: dict[str, str] = {}
-    if not path.exists():
-        return env
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        env[k.strip()] = v.strip()
-    return env
-
-
 @dataclass(frozen=True)
 class KnmiOpenDataClient:
     base_url: str
@@ -50,7 +39,7 @@ class KnmiOpenDataClient:
     def from_neural_hydrology_env(*, max_requests: int = DEFAULT_MAX_REQUESTS_PER_RUN) -> "KnmiOpenDataClient":
         # File is in neural_hydrology/scripts/preprocessing/meteo/, so parents[3] is neural_hydrology/
         root = Path(__file__).resolve().parents[3]
-        env = load_env_file(root / ".env")
+        env = dotenv_values(root / ".env")
         base_url = env.get("KNMI_API_URL", "https://api.dataplatform.knmi.nl/open-data").rstrip("/")
         api_key = env.get("KNMI_API_KEY")
         if not api_key:

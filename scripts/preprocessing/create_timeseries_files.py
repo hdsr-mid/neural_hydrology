@@ -361,7 +361,7 @@ def create_timeseries_files(
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Create per-basin netCDF time series with 30-member ensembles.")
-    p.add_argument("--days", type=int, default=365, help="Historical window length (days).")
+    p.add_argument("--days", type=int, default=370, help="Historical window length (days).")
     p.add_argument(
         "--basin-id",
         action="append",
