@@ -1,5 +1,5 @@
 neuralhydrology>=1.7.0
-numpy>=1.20.0
+numpy==1.26.4
 geopandas==0.14.4
 rasterio==1.4.3
 rasterstats==0.20.0
