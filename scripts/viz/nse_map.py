@@ -38,9 +38,17 @@ def plot_nse(
         north=maxy + pad,
     )
 
+
     fig.update_layout(
-        margin={"r": 0, "t": 0, "l": 0, "b": 0},
-        map=dict(bounds=bounds)
+        map=dict(bounds=bounds),
+        margin={"r": 0, "l": 0, "b": 0, "t": 60},
+        title=dict(
+            text=title,
+            x=0.5,
+            y=0.98,
+            xanchor="center",
+            yanchor="top",
+        ),
     )
 
     fig.update_layout(
@@ -52,33 +60,43 @@ def plot_nse(
 
 if __name__ == "__main__":
 
-    run_dir = "C:/Users/leendert.vanwolfswin/Documents/hdsr/runs/runs/development_run_23_2503_122253"
-    netcdf_output_dir = Path(run_dir) / "netcdf"
-    netcdf_output_dir.mkdir(parents=True, exist_ok=True)
-    data_dir = Path(__file__).parent.parent.parent / "data"
-    basins_file = data_dir / "hdsr_polders.txt"
-    with basins_file.open("r") as f:
-        lines = f.readlines()
-        basins = [line.strip() for line in lines]
-    # basins = ["AFVG41"]
-    print(basins)
+    # run_dir = "C:/Users/leendert.vanwolfswin/Documents/hdsr/runs/runs/development_run_23_2503_122253"
+    # netcdf_output_dir = Path(run_dir) / "netcdf"
+    # netcdf_output_dir.mkdir(parents=True, exist_ok=True)
+    # data_dir = Path(__file__).parent.parent.parent / "data"
+    # basins_file = data_dir / "hdsr_polders.txt"
+    # with basins_file.open("r") as f:
+    #     lines = f.readlines()
+    #     basins = [line.strip() for line in lines]
+    # # basins = ["AFVG41"]
+    # print(basins)
+    #
+    # # Results berekenen per polder
+    # results_dict = evaluate(
+    #     run_dir=run_dir,
+    #     period="test",
+    #     basins=basins,
+    #     config_overrides={
+    #         "device": "cpu",
+    #         "data_dir": str(data_dir),
+    #     }
+    # )
+    #
+    # nse_values_gdf = get_nse_values_gdf(
+    #     results_dict=results_dict,
+    #     basins=basins,
+    # )
+    #
+    # # Save result to file, so it is not required to evaluate the model for each plot adjustment
+    nse_map_gpkg_path = Path("C:/Users/leendert.vanwolfswin/Documents/hdsr/nse_map/nse_map.gpkg")
+    # nse_map_gpkg_path.parent.mkdir(exist_ok=True, parents=True)
+    # nse_values_gdf.to_file(nse_map_gpkg_path)
+    nse_values_gdf = gpd.read_file(nse_map_gpkg_path)
 
-    # Results berekenen per polder
-    results_dict = evaluate(
-        run_dir=run_dir,
-        period="test",
-        basins=basins,
-        config_overrides={
-            "device": "cpu",
-            "data_dir": str(data_dir),
-        }
+    plot_nse(
+        nse_values_gdf,
+        time_resolution="avg",
+        title=f"Nash-Sutcliffe Efficiency (NSE) per afvoergebied, gemiddelde van 1h en 1D"
     )
-
-    nse_values_gdf = get_nse_values_gdf(
-        results_dict=results_dict,
-        basins=basins,
-    )
-    plot_nse(nse_values_gdf, time_resolution="avg", title=f"Nash-Sutcliffe Efficiency (NSE) per afvoergebied, gemiddelde van 1h en 1D")
-
 
 print("Klaar")
