@@ -9,14 +9,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import xarray as xr
 
+from utils.raw_discharge import DISCHARGE_CSV_COL_NAMES, find_discharge_file_by_code, read_raw_discharge
 from utils.attributes import get_area
 from utils.results import evaluate
-
-DISCHARGE_CSV_COL_NAMES = {
-    "gemaal": "debiet_x_IB",
-    "stuw": "debiet",
-    "adcp": "debiet",
-}
 
 
 def weekly_totals_from_netcdf(
@@ -41,19 +36,7 @@ def weekly_totals_from_csv(
     """
     Also converts from m3/s to m3/h
     """
-    df = pd.read_csv(
-        csv_path,
-        sep=",",
-        usecols=["datetime", variable],
-        parse_dates=["datetime"],
-        dayfirst=True  # important for DD/MM/YYYY
-    )
-
-    df["datetime"] = pd.to_datetime(df["datetime"])
-    df = df.set_index("datetime")
-    df[variable] = df[variable].clip(0)
-    df[variable] = (df[variable] * 3600).astype(float)
-    df[variable] = df[variable].astype(float)
+    df = read_raw_discharge(csv_path=csv_path, variable=variable)
     df_weekly = df.resample('W').sum()
     return df_weekly
 
@@ -75,17 +58,6 @@ def get_overlap(
 
     overlap = df1_selection.join(df2_selection, how="inner")
     return overlap
-
-
-def find_discharge_file_by_code(folder: Path, code) -> Tuple[Path, str] | Tuple[None, None]:
-    folder = Path(folder)
-
-    for file in folder.glob("*.csv"):
-        _, _, filename_code, filename_structure_type, _ = file.stem.split("_")
-        if code == filename_code:
-            return file, filename_structure_type
-
-    return None, None
 
 
 def mean_sim_per_measured_quantile(x, y, n_quantiles):

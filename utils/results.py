@@ -8,9 +8,6 @@ import yaml
 from neuralhydrology.evaluation import get_tester
 from neuralhydrology.utils.config import Config
 import xarray as xr
-import geopandas as gpd
-
-from utils.attributes import read_attributes
 
 
 def evaluate(
@@ -110,28 +107,3 @@ def get_nse(
     except KeyError:
         return np.nan
     return nse_value
-
-
-def get_nse_values_gdf(
-        results_dict: Dict,
-        basins: List[str],
-) -> gpd.GeoDataFrame:
-    nse_1h = {}
-    nse_1d = {}
-    for basin in basins:
-        nse_1h[basin] = get_nse(
-            results_dict=results_dict,
-            basin=basin,
-            time_resolution="1h"
-        )
-        nse_1d[basin] = get_nse(
-            results_dict=results_dict,
-            basin=basin,
-            time_resolution="1D"
-        )
-
-    gdf = read_attributes()[["SHAPE_ID", "geometry"]].copy()
-    gdf["nse_1h"] = gdf["SHAPE_ID"].map(nse_1h)
-    gdf["nse_1d"] = gdf["SHAPE_ID"].map(nse_1d)
-    gdf["nse_avg"] = (gdf["nse_1h"] + gdf["nse_1d"]) / 2
-    return gdf

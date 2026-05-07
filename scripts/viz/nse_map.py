@@ -1,9 +1,38 @@
 # Get dataframe of afvoergebied code, geometry, nse_1d, nse_1h, nse_avg
+from typing import Dict, List
+
 from pathlib import Path
-from utils.results import evaluate, get_nse_values_gdf
+
+from utils.attributes import read_attributes
+from utils.results import evaluate, get_nse
 
 import plotly.express as px
 import geopandas as gpd
+
+
+def get_nse_values_gdf(
+        results_dict: Dict,
+        basins: List[str],
+) -> gpd.GeoDataFrame:
+    nse_1h = {}
+    nse_1d = {}
+    for basin in basins:
+        nse_1h[basin] = get_nse(
+            results_dict=results_dict,
+            basin=basin,
+            time_resolution="1h"
+        )
+        nse_1d[basin] = get_nse(
+            results_dict=results_dict,
+            basin=basin,
+            time_resolution="1D"
+        )
+
+    gdf = read_attributes()[["SHAPE_ID", "geometry"]].copy()
+    gdf["nse_1h"] = gdf["SHAPE_ID"].map(nse_1h)
+    gdf["nse_1d"] = gdf["SHAPE_ID"].map(nse_1d)
+    gdf["nse_avg"] = (gdf["nse_1h"] + gdf["nse_1d"]) / 2
+    return gdf
 
 
 def plot_nse(
