@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from scripts.viz.time_series import plot_time_series, plot_time_series_by_area
+from utils.attributes import get_area
 from utils.raw_discharge import DISCHARGE_CSV_COL_NAMES, find_discharge_file_by_code, read_raw_discharge
 
 
@@ -94,6 +95,8 @@ def average_series_over_preceding_non_pump_period(time_series: pd.Series, max_ti
 
 
 if __name__ == "__main__":
+    import xarray as xr
+
     data_dir = Path(__file__).parent.parent.parent / "data"
     raw_discharges_dir = data_dir / "raw_discharge_data"
     basins_file = data_dir / "hdsr_polders.txt"
@@ -105,6 +108,7 @@ if __name__ == "__main__":
     results = dict()
     num_plots = 3
     plot_i = 1
+    max_time_steps = 24 * 3
     for basin in basins:
         if plot_i > num_plots:
             break
@@ -120,16 +124,21 @@ if __name__ == "__main__":
         smooth_discharge = copy(raw_discharge)
         smooth_discharge[measured_variable_name] = average_series_over_preceding_non_pump_period(
             smooth_discharge[measured_variable_name],
-            max_time_steps=24
+            max_time_steps=max_time_steps
         )
+        netcdf_path = data_dir / "time_series" / f"{basin}.nc"
+        old_smoothing_method = xr.open_dataset(netcdf_path)["afvoer"].to_dataframe()
+        area = get_area(basin=basin)
+        old_smoothing_method["afvoer"] = old_smoothing_method["afvoer"] * area * 3600
         results[basin] = {
                 "Raw discharge [m3/h]": raw_discharge,
                 "Smoothed discharge [m3/h]": smooth_discharge,
+                "Old smoothing method [m3/h]": old_smoothing_method,
             }
         plot_i += 1
 
     plot_time_series_by_area(
-        title=f"Raw vs. smooth discharge",
+        title=f"Raw vs. smooth discharge, max time steps: {max_time_steps}",
         data=results,
     )
 

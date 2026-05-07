@@ -1,6 +1,10 @@
 import pandas as pd
 import plotly.graph_objects as go
+from _plotly_utils.colors import qualitative
 from plotly.subplots import make_subplots
+
+
+PALETTE: list[str] = qualitative.Plotly
 
 
 def plot_time_series(
@@ -61,7 +65,7 @@ def plot_time_series_by_area(
     )
 
     for row, (area, series_dict) in enumerate(data.items(), start=1):
-        for label, df in series_dict.items():
+        for i, (label, df) in enumerate(series_dict.items()):
             fig.add_trace(
                 go.Scatter(
                     x=df.index,
@@ -69,7 +73,8 @@ def plot_time_series_by_area(
                     mode="lines",
                     name=label,
                     legendgroup=label,
-                    showlegend=row == 1,  # legend only once
+                    showlegend=row == 1,
+                    line=dict(color=PALETTE[i % len(PALETTE)])
                 ),
                 row=row,
                 col=1,
