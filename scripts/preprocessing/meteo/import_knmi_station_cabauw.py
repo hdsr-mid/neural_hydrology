@@ -17,11 +17,12 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from dotenv import dotenv_values
+
 from neural_hydrology.scripts.preprocessing.meteo.knmi_open_data import (
     HISTORICAL_FETCH_END_OFFSET_HOURS,
     KnmiOpenDataClient,
     KnmiRequestBudgetExceeded,
-    load_env_file,
 )
 LOGGER = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ def _end_utc_from_env_or_now() -> datetime:
     Otherwise, fall back to current UTC hour endtime.
     """
     nh_root = Path(__file__).resolve().parents[3]
-    env = load_env_file(nh_root / ".env")
+    env = dotenv_values(nh_root / ".env")
     est = env.get("ENSEMBLE_STARTTIME")
     if est:
         try:

@@ -13,15 +13,27 @@ neural_hydrology/
 ├── README.md                 # Dit bestand
 ├── .gitignore               # Git ignore configuratie
 ├── config.yml               # NeuralHydrology run-config (data, model, features, train/valid/test)
+├── requirements.txt          # Python dependencies voor dit project
+├── .env.example              # Voorbeeld van benodigde omgevingsvariabelen
+├── configs/                 # Configuratie bestanden
+│   ├── experiment_configs/  # Specifieke experiment configuraties
+│   └── template_configs/    # Template configuraties
 ├── scripts/                 # Python scripts
-│   ├── training/           # Training scripts
-│   ├── analysis/           # Analyse en evaluatie scripts
-│   └── preprocessing/      # Preprocessing/hulpscripts
+│   ├── preprocessing/       # Preprocessing (timeseries + KNMI importers)
+│   ├── training/            # Training scripts
+│   ├── inference/           # Inference (operationele verwachtingen)
+│   ├── analysis/            # Analyse en evaluatie scripts
+│   └── viz/                 # Visualisaties
 ├── data/                   # Dataset
 │   ├── attributes/         # Gebiedskenmerken van polders
 │   ├── time_series/        # Tijdreeks data (voorbeelden)
 │   └── hdsr_polders.txt    # Lijst van ids afvoergebieden
-└── notebooks/              # Jupyter notebooks voor analyse
+├── data_ens/                # Operationele input data (ensembles)
+│   ├── attributes/          # Attributes voor inference/training op ensembles
+│   ├── time_series/         # NetCDF per gebied: 30 ensembleleden per variabele
+│   └── _tmp_harmonie/        # (cache) gedownloade HARMONIE .tar bestanden
+├── inference_runs/          # Operationele output: ensemble voorspellingen (NetCDF)
+└── notebooks/               # Jupyter notebooks voor analyse
 ```
 
 ## Datasets
@@ -50,12 +62,18 @@ De configuratie van een run staat in `config.yml`. Voor experimenten maak je hie
 
 ## Belangrijkste scripts
 
+### Preprocessing (operationeel)
+- `scripts/preprocessing/create_timeseries_files.py` - Bouwt `data_ens/time_series/<SHAPE_ID>.nc` met 30-leden ensembles uit historisch + forecast
+
 ### Training
 
-- `batch_train_single.py` - Batch training voor single LSTM model per afvoergebied
-- `run_model.py` - Basis model training script voor een of meerdere configuraties
-- `hyperparameter_optimalisatie.py` - Optuna hyperparameter optimalisatie (Databricks + MLflow)
-- `batch_train_model.py` - Retrain/ensemble op basis van gekozen HPO trial (Databricks + MLflow)
+- `scripts/training/batch_train_single.py` - Batch training voor single LSTM model per afvoergebied
+- `scripts/training/run_model.py` - Basis model training script voor een of meerdere configuraties
+- `scripts/training/hyperparameter_optimalisatie.py` - Optuna hyperparameter optimalisatie (Databricks + MLflow)
+- `scripts/training/batch_train_model.py` - Retrain/ensemble op basis van gekozen HPO trial (Databricks + MLflow)
+
+### Inference (operationeel)
+- `scripts/inference/run_model.py` - Draait ensemble inference vanuit een getrainde run en schrijft output naar `inference_runs/`
 
 ### Analyse
 
@@ -230,7 +248,11 @@ De training resultaten worden lokaal opgeslagen in een `runs/` folder (niet meeg
 - Visualisaties
 - TensorBoard logs
 
-## Samenstellen ensemble tijdreeksen (preprocessing)
+## Operationeel verwachtingen
+
+Deze sectie beschrijft de **operationele keten** van (1) opbouwen van ensemble-tijdreeksen en (2) draaien van ensemble-inference met een getrainde NeuralHydrology run.
+
+### 1) Preprocessing: ensemble tijdreeksen bouwen
 
 Het script `scripts/preprocessing/create_timeseries_files.py` bouwt per afvoergebied (`SHAPE_ID`) één NetCDF in `data_ens/time_series/<SHAPE_ID>.nc` met **30 ensembleleden** per variabele (`neerslag_1` … `neerslag_30`, idem voor `temperatuur`, `u`, `v`, `straling`).
 
@@ -293,6 +315,36 @@ flowchart TD
   histPrec --> orchestrator
   fcEns --> orchestrator
   orchestrator --> basinNc["data_ens/time_series SHAPE_ID.nc"]
+```
+
+### 2) Inference: ensemble verwachtingen draaien met getraind model
+Het script `scripts/inference/run_model.py` draait **ensemble inference** met een eerder getrainde NeuralHydrology run (map met `config.yml` en checkpoints) op de NetCDF’s uit `data_ens/time_series/`.
+
+- **Input**
+  - **Modelrun**: `--run_dir <pad/naar/runs/<run_id>>` (moet `config.yml` bevatten)
+  - **Data**: `--data_dir neural_hydrology/data_ens` (default) met `time_series/` en `attributes/`
+  - **Basin lijst**: optioneel `--basin_file <pad>` (default: `<data_dir>/hdsr_polders.txt`)
+  - **Ensemble starttijd**: `ENSEMBLE_STARTTIME=YYYYMMDDHH` (UTC) in `neural_hydrology/.env` (optioneel; zonder deze waarde start inference vanaf het begin van de beschikbare NetCDF-periode, rekening houdend met warm-up)
+
+- **Gedrag**
+  - Bepaalt automatisch een **testperiode** op basis van de NetCDF-periode en de benodigde **warm-up** uit de trainingconfig (`seq_length` en `predict_last_n`, voor alle `use_frequencies`).
+  - Loopt per ensemblelid \(k = 1..N\) en selecteert inputs via kolommen `<variabele>_<k>` uit de NetCDF (bijv. `neerslag_17`), die intern als `neerslag` etc. worden aangeboden aan het model.
+
+- **Output**
+  - Schrijft per frequentie één NetCDF in `inference_runs/`:
+    - `inference_runs/polders_hdsr_<freq>.nc`
+  - De NetCDF bevat **groepen per basin** (groepnaam = `SHAPE_ID`) met een `datetime`-as en variabelen per ensemblelid:
+    - `<target>_sim_1`, `<target>_sim_2`, … `<target>_sim_<N>`
+
+#### Uitvoeren
+
+```bash
+# Voorbeeld: 30-leden ensemble inference op de meest recente data_ens
+python neural_hydrology/scripts/inference/run_model.py \
+  --run_dir neural_hydrology/runs/<jouw_run_map> \
+  --data_dir neural_hydrology/data_ens \
+  --out_dir neural_hydrology/inference_runs \
+  --n_ensembles 30
 ```
 
 ## Notebooks
