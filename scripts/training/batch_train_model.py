@@ -9,6 +9,7 @@ import shutil
 import yaml
 import torch
 from neuralhydrology.nh_run import start_run
+from neuralhydrology.nh_run import eval_run
 from neuralhydrology.utils.config import Config
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 import warnings
@@ -172,13 +173,6 @@ def copy_trial_folder(source_run_dir: Path, destination_dir: Path) -> Path:
     return destination_dir
 
 
-def load_config(config_path: Path):
-    with open(config_path) as file:
-        config_dict = yaml.load(file, Loader=yaml.FullLoader)
-    config_object = Config(config_path)
-    return config_dict, config_object
-
-
 def prepare_retrain_config(base_config_path: Path, retrain_dir: Path, i_retrain: int):
     with open(base_config_path) as file:
         config = yaml.load(file, Loader=yaml.FullLoader)
@@ -209,7 +203,8 @@ def main():
     if not copied_config_path.exists():
         raise RuntimeError(f"Copied config.yml not found: {copied_config_path}")
 
-    config_dict, config_object = load_config(copied_config_path)
+    with open(config_path) as file:
+        config_dict = yaml.load(file, Loader=yaml.FullLoader)
 
     print(f"Source trial folder: {source_trial_dir}")
     print(f"Copied trial folder: {copied_trial_dir}")
@@ -217,7 +212,9 @@ def main():
     print(f"Destination folder: {DESTINATION_DIR}")
     print(f"Copied config path: {copied_config_path}")
     print(f"Copied config experiment_name: {config_dict.get('experiment_name')}")
-    print(f"Copied config model: {config_object.model}")
+    print(f"Copied config model: {config_dict.get('model')}")
+
+    del config_dict
 
     with mlflow.start_run(run_name=DESTINATION_DIR.name) as parent_run:
         mlflow.log_params(
