@@ -238,25 +238,51 @@ def objective(trial):
                 "(config: log_tensorboard: true, validate_every: 1)."
             )
 
-        tag_nse_1d = find_tag(data, 'valid/mean_nse_1D')
-        tag_nse_1h = find_tag(data, 'valid/mean_nse_1h')
+        # 1. fix variable names: use the _valid suffixed variables
+        tag_nse_1d_valid = find_tag(data, 'valid/mean_nse_1d')
+        tag_nse_1h_valid = find_tag(data, 'valid/mean_nse_1h')
+        tag_median_nse_1d_valid = find_tag(data, 'valid/median_nse_1d')
+        tag_median_nse_1h_valid = find_tag(data, 'valid/median_nse_1h')
+        # 2. validation loss tag (epoch-level)
+        tag_loss_valid = find_tag(data, 'valid/avg_loss')
+        # 3. training loss tag (epoch-level)
+        tag_loss_train = find_tag(data, 'train/avg_loss')
 
-        validation_NSE_scores_1d = np.array([loss for epoch, loss in data[tag_nse_1d]])
-        validation_NSE_scores_1h = np.array([loss for epoch, loss in data[tag_nse_1h]])
+        validation_NSE_scores_1d = np.array([loss for epoch, loss in data[tag_nse_1d_valid]])
+        validation_NSE_scores_1h = np.array([loss for epoch, loss in data[tag_nse_1h_valid]])
         validation_NSE_scores_mean_1d_1h = (validation_NSE_scores_1d + validation_NSE_scores_1h) / 2
 
         # we take the maximum validation NSE score
         max_validation_NSE_score = float(np.max(validation_NSE_scores_mean_1d_1h))
 
+        # log mean NSE per epoch
         for (epoch_nse_1d, loss_nse_1d), (epoch_nse_1h, loss_nse_1h) in zip(
-            data[tag_nse_1d],
-            data[tag_nse_1h],
+            data[tag_nse_1d_valid],
+            data[tag_nse_1h_valid],
         ):
             mlflow.log_metric("val_nse_1d", float(loss_nse_1d), step=int(epoch_nse_1d))
             mlflow.log_metric("val_nse_1h", float(loss_nse_1h), step=int(epoch_nse_1h))
-            mlflow.log_metric("val_nse_1h_1d", (float(loss_nse_1d) + float(loss_nse_1h))/2, step=int(epoch_nse_1h))
+            mlflow.log_metric("val_nse_1h_1d", (float(loss_nse_1d) + float(loss_nse_1h)) / 2, step=int(epoch_nse_1h))
+
+        # 4. log median NSE per epoch
+        for (epoch_med_1d, med_nse_1d), (epoch_med_1h, med_nse_1h) in zip(
+            data[tag_median_nse_1d_valid],
+            data[tag_median_nse_1h_valid],
+        ):
+            mlflow.log_metric("val_median_nse_1d", float(med_nse_1d), step=int(epoch_med_1d))
+            mlflow.log_metric("val_median_nse_1h", float(med_nse_1h), step=int(epoch_med_1h))
+
+        # 2. log validation loss per epoch
+        for epoch_val_loss, val_loss in data[tag_loss_valid]:
+            mlflow.log_metric("val_loss", float(val_loss), step=int(epoch_val_loss))
+
+        # 3. log training loss per epoch
+        for epoch_train_loss, train_loss in data[tag_loss_train]:
+            mlflow.log_metric("train_loss", float(train_loss), step=int(epoch_train_loss))
 
         mlflow.log_metric("max_validation_nse_1d_1h", max_validation_NSE_score)
+        mlflow.log_metric("epoch_largest_NSE", int(np.argmax(validation_NSE_scores_mean_1d_1h)))
+
         mlflow.log_artifact(str(config_path), artifact_path="config")
 
     return max_validation_NSE_score
