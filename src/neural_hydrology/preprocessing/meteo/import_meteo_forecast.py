@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import re
@@ -173,23 +174,41 @@ def _open_grib_field(
     type_of_level: str,
     level: int,
     time_range_indicator: int,
-) -> xr.DataArray:
-    ds = xr.open_dataset(
+) -> np.ndarray:
+    """Load one GRIB field and return a detached float64 copy (dataset is closed before return)."""
+    filter_by_keys = {
+        "indicatorOfParameter": indicator_of_parameter,
+        "typeOfLevel": type_of_level,
+        "level": level,
+        "timeRangeIndicator": time_range_indicator,
+    }
+    with xr.open_dataset(
         path,
         engine="cfgrib",
-        backend_kwargs={
-            "filter_by_keys": {
-                "indicatorOfParameter": indicator_of_parameter,
-                "typeOfLevel": type_of_level,
-                "level": level,
-                "timeRangeIndicator": time_range_indicator,
-            }
-        },
-    )
-    # cfgrib exposes variable name as 'unknown' for GRIB1 from this centre.
-    if "unknown" not in ds:
-        raise KeyError(f"Expected 'unknown' var not found in {path.name}. vars={list(ds.data_vars)}")
-    return ds["unknown"]
+        backend_kwargs={"filter_by_keys": filter_by_keys},
+    ) as ds:
+        # cfgrib exposes variable name as 'unknown' for GRIB1 from this centre.
+        if "unknown" not in ds:
+            raise KeyError(f"Expected 'unknown' var not found in {path.name}. vars={list(ds.data_vars)}")
+        return np.asarray(ds["unknown"].values, dtype=np.float64)
+
+
+def _remove_extracted_member_gbs(extract_dir: Path, member_id: int) -> int:
+    """Delete flattened *_GB files for one ensemble member from an extract directory."""
+    removed = 0
+    for p in extract_dir.glob("*_GB"):
+        try:
+            mid2, _, _ = _parse_member_and_step(p.name)
+        except ValueError:
+            continue
+        if mid2 != member_id:
+            continue
+        try:
+            p.unlink()
+            removed += 1
+        except FileNotFoundError:
+            pass
+    return removed
 
 
 def _zonal_mean_for_all_polders(grid_values: np.ndarray, polders_4326: gpd.GeoDataFrame, affine) -> np.ndarray:
@@ -461,27 +480,26 @@ def load_harmonie_ensemble_forecast_by_basin() -> dict[str, dict[str, object]]:
                 continue
 
             # precipitation cumulative (indicator 181, TRI 4, heightAboveGround level 0)
-            da_p = _open_grib_field(
+            p_vals = _open_grib_field(
                 f_meteo, indicator_of_parameter=181, type_of_level="heightAboveGround", level=0, time_range_indicator=4
             )
             # temperature at 2m (indicator 11, TRI 0)
-            da_t = _open_grib_field(
+            t_vals = _open_grib_field(
                 f_meteo, indicator_of_parameter=11, type_of_level="heightAboveGround", level=2, time_range_indicator=0
             )
             # u/v at 10m (33/34, TRI 0)
-            da_u = _open_grib_field(
+            u_vals = _open_grib_field(
                 f_meteo, indicator_of_parameter=33, type_of_level="heightAboveGround", level=10, time_range_indicator=0
             )
-            da_v = _open_grib_field(
+            v_vals = _open_grib_field(
                 f_meteo, indicator_of_parameter=34, type_of_level="heightAboveGround", level=10, time_range_indicator=0
             )
             # global radiation cumulative (indicator 117, TRI 4) from p2b
-            da_r = _open_grib_field(
+            r_vals = _open_grib_field(
                 f_renew, indicator_of_parameter=117, type_of_level="heightAboveGround", level=0, time_range_indicator=4
             )
 
             # Diagnostics: NaNs can originate from source fields or be introduced by zonal-mean/missing leads.
-            p_vals = da_p.values
             if np.isnan(p_vals).any():
                 nan_frac = float(np.isnan(p_vals).mean())
                 LOGGER.warning(
@@ -502,14 +520,13 @@ def load_harmonie_ensemble_forecast_by_basin() -> dict[str, dict[str, object]]:
                     nan_frac,
                 )
             precip_cum_full[li, :] = precip_mean
-            tvals = _zonal_mean_for_all_polders(da_t.values, polders, affine)
+            tvals = _zonal_mean_for_all_polders(t_vals, polders, affine)
             # Convert K -> C if values look like Kelvin
             if np.nanmean(tvals) > 100:
                 tvals = tvals - 273.15
             temp_c_full[li, :] = tvals
-            wind_u_full[li, :] = _zonal_mean_for_all_polders(da_u.values, polders, affine)
-            wind_v_full[li, :] = _zonal_mean_for_all_polders(da_v.values, polders, affine)
-            r_vals = da_r.values
+            wind_u_full[li, :] = _zonal_mean_for_all_polders(u_vals, polders, affine)
+            wind_v_full[li, :] = _zonal_mean_for_all_polders(v_vals, polders, affine)
             if np.isnan(r_vals).any():
                 nan_frac = float(np.isnan(r_vals).mean())
                 LOGGER.warning(
@@ -560,6 +577,16 @@ def load_harmonie_ensemble_forecast_by_basin() -> dict[str, dict[str, object]]:
             per_basin[bid]["u"][:, slot] = wind_u[:, bi]
             per_basin[bid]["v"][:, slot] = wind_v[:, bi]
             per_basin[bid]["straling_j_m2_h"][:, slot] = rad_inc[:, bi]
+
+        removed_a = _remove_extracted_member_gbs(extract_p2a, mid)
+        removed_b = _remove_extracted_member_gbs(extract_p2b, mid)
+        gc.collect()
+        LOGGER.debug(
+            "Freed extracted GB for member %s (%d p2a + %d p2b files removed)",
+            mid,
+            removed_a,
+            removed_b,
+        )
 
     out: dict[str, dict[str, object]] = {}
     date_index = pd.DatetimeIndex(pd.to_datetime(times))

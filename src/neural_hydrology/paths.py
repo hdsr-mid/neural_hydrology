@@ -12,13 +12,16 @@ from dotenv import dotenv_values, load_dotenv
 # Databricks/Spark: suppress noisy Py4J bridge logs when scripts set root logging to INFO.
 _PY4J_LOGGERS = ("py4j", "py4j.java_gateway", "py4j.clientserver")
 
+# cfgrib: stale .idx sidecar warnings on every GRIB open (harmless; index is rebuilt).
+_CFGRIB_LOGGERS = ("cfgrib", "cfgrib.messages")
 
-def _suppress_py4j_logging() -> None:
-    for name in _PY4J_LOGGERS:
+
+def _suppress_noisy_third_party_logging() -> None:
+    for name in (*_PY4J_LOGGERS, *_CFGRIB_LOGGERS):
         logging.getLogger(name).setLevel(logging.ERROR)
 
 
-_suppress_py4j_logging()
+_suppress_noisy_third_party_logging()
 
 # Env key -> default path relative to project root (or special handling).
 _PATH_DEFAULTS: dict[str, str] = {
@@ -132,3 +135,44 @@ def get_env(key: str, default: str | None = None) -> str | None:
     if value is None or str(value).strip() == "":
         return default
     return str(value)
+
+
+BAGGING_MODEL_DIR_KEYS: tuple[str, ...] = tuple(f"BEST_MODEL_DIR_{i}" for i in range(1, 6))
+
+
+def resolve_bagging_model_dirs() -> list[Path]:
+    """
+    Resolve the five trained run directories for model-bagging inference.
+
+    Each path must exist and contain ``config.yml``. All ``BEST_MODEL_DIR_1`` …
+    ``BEST_MODEL_DIR_5`` must be set in ``.env`` or the process environment.
+    """
+    env = load_env()
+    root = get_project_root()
+    dirs: list[Path] = []
+    missing: list[str] = []
+
+    for key in BAGGING_MODEL_DIR_KEYS:
+        raw = env.get(key)
+        if raw is None or not str(raw).strip():
+            missing.append(key)
+            continue
+        path = Path(str(raw)).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        path = path.resolve()
+        if not path.is_dir():
+            raise RuntimeError(f"{key} is not a directory: {path}")
+        cfg = path / "config.yml"
+        if not cfg.is_file():
+            raise RuntimeError(
+                f"{key} must point to a run folder containing config.yml: {path}"
+            )
+        dirs.append(path)
+
+    if missing:
+        raise RuntimeError(
+            "All five model directories are required for ensemble bagging. "
+            f"Set in .env: {', '.join(missing)}"
+        )
+    return dirs

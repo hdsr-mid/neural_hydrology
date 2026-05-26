@@ -1,12 +1,21 @@
 import os
 
+# Prevent TensorFlow (loaded as side-effect on Databricks ML runtime) from
+# grabbing all GPU memory, which conflicts with PyTorch's CUDA context.
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 from pathlib import Path
 import yaml
 import torch
 from neural_hydrology.paths import get_env, get_path, load_env
+from neural_hydrology.utils.training import (
+    load_validated_tensorboard_scalars,
+    log_tensorboard_metrics_to_mlflow,
+    run_neural_hydrology_model,
+)
 from neuralhydrology.utils.config import Config
 from neuralhydrology.nh_run import start_run
-from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 import warnings
 warnings.filterwarnings("ignore", message="'H' is deprecated and will be removed in a future version")
 import os 
@@ -35,6 +44,31 @@ mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "databricks"))
 mlflow.set_experiment(f"/Shared/{EXPERIMENT_NAME}")
 
 def get_run_folder_by_name_timestamp(trial_dir, experiment_name):
+    """Find the most recent NeuralHydrology run folder for a given experiment.
+
+    NeuralHydrology creates a subfolder for each run with the naming convention
+    '{experiment_name}_{DDMM_HHMMSS}'. This function finds all such folders in
+    the given trial directory and returns the one with the most recent timestamp.
+
+    Parameters
+    ----------
+    trial_dir : str or Path
+        Directory to search for run folders. Typically the per-trial output
+        directory (e.g. RUNS_DIR / 'trial_0').
+    experiment_name : str
+        The experiment name prefix used by NeuralHydrology when creating the
+        run folder (matches config['experiment_name']).
+
+    Returns
+    -------
+    Path
+        The Path to the most recently created run folder.
+
+    Raises
+    ------
+    RuntimeError
+        If no folders matching '{experiment_name}_*' are found in trial_dir.
+    """
     trial_dir = Path(trial_dir)
 
     matching_dirs = [
@@ -54,42 +88,130 @@ def get_run_folder_by_name_timestamp(trial_dir, experiment_name):
     matching_dirs.sort(key=parse_run_time, reverse=True)
     return matching_dirs[0]
 
-def run_neural_hydrology_model(config_name):
-    run_config = Config(Path(config_name))
-    print('model:\t\t', run_config.model)
 
-    # by default we assume that you have at least one CUDA-capable NVIDIA GPU
-    if torch.cuda.is_available():
-        start_run(config_file=Path(config_name))
+def generate_static_attributes_HPO(trial):
+    """Generate the list of static catchment attributes for a hyperparameter trial.
 
-    # fall back to CPU-only mode
-    else:
-        start_run(config_file=Path(config_name), gpu=-1)
+    Uses Optuna's suggest_categorical to select which groups of static attributes
+    to include in the model. A base set of attributes is always included
 
-def extract_tensorboard_scalars(logdir):
-    """Extract all TensorBoard scalars, searching subdirectories for event files."""
-    scalars = {}
+    Parameters
+    ----------
+    trial : optuna.trial.Trial
+        The current Optuna trial object, used to suggest categorical choices
+        for each attribute group.
 
-    # Walk logdir and all subdirectories to find every event file
-    for root, dirs, files in os.walk(logdir):
-        event_files = [f for f in files if f.startswith('events.out.tfevents')]
-        if event_files:
-            event_acc = EventAccumulator(root)
-            event_acc.Reload()
-            for tag in event_acc.Tags().get('scalars', []):
-                scalars[tag] = [(e.step, e.value) for e in event_acc.Scalars(tag)]
+    Returns
+    -------
+    list[str]
+        Combined list of static attribute column names to be used in the
+        NeuralHydrology config under 'static_attributes'.
+    """
+    # STATIC VARIABLES SELECTION OF THE HPO BELOW
+    static_variables = [
+        'water_percentage',
+        'stedelijk_percentage',
+        'oppervlak',
+        'water_opp',
+        'stedelijk_opp',
+    ]
 
-    return scalars
+    maaiveldhoogte_mean_median_options = {
+        'none': [],
+        'mean': ['maaiveldhoogte'],
+        'median': ['maaiveldhoogte_median'],
+        'mean_median': ['maaiveldhoogte', 'maaiveldhoogte_median'],
+    }
+    maaiveldhoogte_mean_median_choice = trial.suggest_categorical(
+        'static_variables_maaiveldhoogte_mean_median',
+        list(maaiveldhoogte_mean_median_options.keys()),
+    )
+    static_variables_maaiveldhoogte_mean_median = maaiveldhoogte_mean_median_options[
+        maaiveldhoogte_mean_median_choice
+    ]
 
-def find_tag(data, pattern):
-    """Find a TensorBoard tag matching the pattern (case-insensitive)."""
-    pattern_lower = pattern.lower()
-    for tag in data.keys():
-        if tag.lower() == pattern_lower:
-            return tag
-    raise KeyError(f"No tag matching '{pattern}' found. Available tags: {list(data.keys())}")
+    maaiveldhoogte_iqr_p95_p05_options = {
+        'none': [],
+        'iqr': ['maaiveldhoogte_iqr'],
+        'p95_p05': ['maaiveldhoogte_p95_minus_p05'],
+        'iqr_p95_p05': ['maaiveldhoogte_iqr', 'maaiveldhoogte_p95_minus_p05'],
+    }
+    maaiveldhoogte_iqr_p95_p05_choice = trial.suggest_categorical(
+        'static_variables_maaiveldhoogte_iqr_p95_p05',
+        list(maaiveldhoogte_iqr_p95_p05_options.keys()),
+    )
+    static_variables_maaiveldhoogte_iqr_p95_p05 = maaiveldhoogte_iqr_p95_p05_options[
+        maaiveldhoogte_iqr_p95_p05_choice
+    ]
+
+    kwel_options = {
+        'none': [],
+        'kwel_mean': ['kwel_mean'],
+    }
+    kwel_choice = trial.suggest_categorical(
+        'static_variables_kwel',
+        list(kwel_options.keys()),
+    )
+    static_variables_kwel = kwel_options[kwel_choice]
+
+    peil_options = {
+        'none': [],
+        'peil_range': ['peil_range'],
+    }
+    peil_choice = trial.suggest_categorical(
+        'static_variables_peil',
+        list(peil_options.keys()),
+    )
+    static_variables_peil = peil_options[peil_choice]
+
+    infiltratie_permeabiliteit_options = {
+        'none': [],
+        'infiltratie': ['infiltratie'],
+        'permabiliteit': ['permabiliteit'],
+        'infiltratie_permabiliteit': ['infiltratie', 'permabiliteit'],
+    }
+    infiltratie_permeabiliteit_choice = trial.suggest_categorical(
+        'static_variables_infiltratie_permeabiliteit',
+        list(infiltratie_permeabiliteit_options.keys()),
+    )
+    static_variables_infiltratie_permeabiliteit = infiltratie_permeabiliteit_options[
+        infiltratie_permeabiliteit_choice
+    ]
+
+    static_variables = (
+        static_variables
+        + static_variables_maaiveldhoogte_mean_median
+        + static_variables_maaiveldhoogte_iqr_p95_p05
+        + static_variables_kwel
+        + static_variables_peil
+        + static_variables_infiltratie_permeabiliteit
+    )
 
 def objective(trial):
+    """Optuna objective function for hyperparameter optimization of the LSTM model.
+
+    Executes one full trial of the HPO loop:
+    1. Loads the base NeuralHydrology config from BASE_CONFIG.
+    2. Modifies hyperparameters (dropout, learning_rate, static_attributes)
+       based on Optuna suggestions.
+    3. Saves the modified config to a per-trial directory.
+    4. Logs trial parameters and config as an MLflow artifact.
+    5. Trains the NeuralHydrology model with the modified config.
+    6. Extracts validation metrics from TensorBoard logs and logs them to MLflow.
+    7. Returns the optimization target (max mean NSE across 1d and 1h resolutions).
+
+    Parameters
+    ----------
+    trial : optuna.trial.Trial
+        The current Optuna trial object providing suggest_* methods for
+        hyperparameter sampling.
+
+    Returns
+    -------
+    float
+        The maximum validation NSE score (average of 1-day and 1-hour mean NSE)
+        achieved during training. Optuna maximizes this value.
+    """
     with mlflow.start_run(run_name=f"trial_{trial.number}", nested=True):
 
         with open(BASE_CONFIG) as file:
@@ -113,89 +235,7 @@ def objective(trial):
         dropout = trial.suggest_categorical('dropout', [0.1, 0.2, 0.3, 0.4])
         config['output_dropout'] = dropout
         config['learning_rate'] = {0: trial.suggest_categorical('learning_rate', [0.001, 0.0005, 0.0001, 0.00005, 0.00001])}
-
-
-        # STATIC VARIABLES SELECTION OF THE HPO BELOW
-        static_variables = [
-            'water_percentage',
-            'stedelijk_percentage',
-            'oppervlak',
-            'water_opp',
-            'stedelijk_opp',
-        ]
-
-        maaiveldhoogte_mean_median_options = {
-            'none': [],
-            'mean': ['maaiveldhoogte'],
-            'median': ['maaiveldhoogte_median'],
-            'mean_median': ['maaiveldhoogte', 'maaiveldhoogte_median'],
-        }
-        maaiveldhoogte_mean_median_choice = trial.suggest_categorical(
-            'static_variables_maaiveldhoogte_mean_median',
-            list(maaiveldhoogte_mean_median_options.keys()),
-        )
-        static_variables_maaiveldhoogte_mean_median = maaiveldhoogte_mean_median_options[
-            maaiveldhoogte_mean_median_choice
-        ]
-
-        maaiveldhoogte_iqr_p95_p05_options = {
-            'none': [],
-            'iqr': ['maaiveldhoogte_iqr'],
-            'p95_p05': ['maaiveldhoogte_p95_minus_p05'],
-            'iqr_p95_p05': ['maaiveldhoogte_iqr', 'maaiveldhoogte_p95_minus_p05'],
-        }
-        maaiveldhoogte_iqr_p95_p05_choice = trial.suggest_categorical(
-            'static_variables_maaiveldhoogte_iqr_p95_p05',
-            list(maaiveldhoogte_iqr_p95_p05_options.keys()),
-        )
-        static_variables_maaiveldhoogte_iqr_p95_p05 = maaiveldhoogte_iqr_p95_p05_options[
-            maaiveldhoogte_iqr_p95_p05_choice
-        ]
-
-        kwel_options = {
-            'none': [],
-            'kwel_mean': ['kwel_mean'],
-        }
-        kwel_choice = trial.suggest_categorical(
-            'static_variables_kwel',
-            list(kwel_options.keys()),
-        )
-        static_variables_kwel = kwel_options[kwel_choice]
-
-        peil_options = {
-            'none': [],
-            'peil_range': ['peil_range'],
-        }
-        peil_choice = trial.suggest_categorical(
-            'static_variables_peil',
-            list(peil_options.keys()),
-        )
-        static_variables_peil = peil_options[peil_choice]
-
-        infiltratie_permeabiliteit_options = {
-            'none': [],
-            'infiltratie': ['infiltratie'],
-            'permabiliteit': ['permabiliteit'],
-            'infiltratie_permabiliteit': ['infiltratie', 'permabiliteit'],
-        }
-        infiltratie_permeabiliteit_choice = trial.suggest_categorical(
-            'static_variables_infiltratie_permeabiliteit',
-            list(infiltratie_permeabiliteit_options.keys()),
-        )
-        static_variables_infiltratie_permeabiliteit = infiltratie_permeabiliteit_options[
-            infiltratie_permeabiliteit_choice
-        ]
-
-        static_variables = (
-            static_variables
-            + static_variables_maaiveldhoogte_mean_median
-            + static_variables_maaiveldhoogte_iqr_p95_p05
-            + static_variables_kwel
-            + static_variables_peil
-            + static_variables_infiltratie_permeabiliteit
-        )
-
-        config['static_attributes'] = static_variables
+        config['static_attributes'] = generate_static_attributes_HPO(trial)
 
         # Save config inside the trial folder
         config_name = f'config_simulatie_nr_{trial.number}.yml'
@@ -222,71 +262,8 @@ def objective(trial):
             experiment_name=experiment_name,
         )
 
-        # now we need to log the metric we want to optimize from the neural hydrology model using the latest folder
-        # we optimize the hyperparameters to maximize the mean NSE score
-        data = extract_tensorboard_scalars(run_folder)
-        # Check for validation tags before accessing them
-        if not any('valid' in tag for tag in data.keys()):
-            print("WARNING: No validation tags found in TensorBoard logs.")
-            print("Run folder contents:")
-            for root, dirs, files in os.walk(run_folder):
-                level = root.replace(str(run_folder), '').count(os.sep)
-                indent = ' ' * 2 * level
-                print(f"{indent}{os.path.basename(root)}/")
-                sub_indent = ' ' * 2 * (level + 1)
-                for file in files:
-                    print(f"{sub_indent}{file}")
-            raise RuntimeError(
-                f"No validation TensorBoard tags found in {run_folder}. "
-                f"Available tags: {list(data.keys())}. "
-                "Check that NeuralHydrology is configured to log validation metrics to TensorBoard "
-                "(config: log_tensorboard: true, validate_every: 1)."
-            )
-
-        # 1. fix variable names: use the _valid suffixed variables
-        tag_nse_1d_valid = find_tag(data, 'valid/mean_nse_1d')
-        tag_nse_1h_valid = find_tag(data, 'valid/mean_nse_1h')
-        tag_median_nse_1d_valid = find_tag(data, 'valid/median_nse_1d')
-        tag_median_nse_1h_valid = find_tag(data, 'valid/median_nse_1h')
-        # 2. validation loss tag (epoch-level)
-        tag_loss_valid = find_tag(data, 'valid/avg_loss')
-        # 3. training loss tag (epoch-level)
-        tag_loss_train = find_tag(data, 'train/avg_loss')
-
-        validation_NSE_scores_1d = np.array([loss for epoch, loss in data[tag_nse_1d_valid]])
-        validation_NSE_scores_1h = np.array([loss for epoch, loss in data[tag_nse_1h_valid]])
-        validation_NSE_scores_mean_1d_1h = (validation_NSE_scores_1d + validation_NSE_scores_1h) / 2
-
-        # we take the maximum validation NSE score
-        max_validation_NSE_score = float(np.max(validation_NSE_scores_mean_1d_1h))
-
-        # log mean NSE per epoch
-        for (epoch_nse_1d, loss_nse_1d), (epoch_nse_1h, loss_nse_1h) in zip(
-            data[tag_nse_1d_valid],
-            data[tag_nse_1h_valid],
-        ):
-            mlflow.log_metric("val_nse_1d", float(loss_nse_1d), step=int(epoch_nse_1d))
-            mlflow.log_metric("val_nse_1h", float(loss_nse_1h), step=int(epoch_nse_1h))
-            mlflow.log_metric("val_nse_1h_1d", (float(loss_nse_1d) + float(loss_nse_1h)) / 2, step=int(epoch_nse_1h))
-
-        # 4. log median NSE per epoch
-        for (epoch_med_1d, med_nse_1d), (epoch_med_1h, med_nse_1h) in zip(
-            data[tag_median_nse_1d_valid],
-            data[tag_median_nse_1h_valid],
-        ):
-            mlflow.log_metric("val_median_nse_1d", float(med_nse_1d), step=int(epoch_med_1d))
-            mlflow.log_metric("val_median_nse_1h", float(med_nse_1h), step=int(epoch_med_1h))
-
-        # 2. log validation loss per epoch
-        for epoch_val_loss, val_loss in data[tag_loss_valid]:
-            mlflow.log_metric("val_loss", float(val_loss), step=int(epoch_val_loss))
-
-        # 3. log training loss per epoch
-        for epoch_train_loss, train_loss in data[tag_loss_train]:
-            mlflow.log_metric("train_loss", float(train_loss), step=int(epoch_train_loss))
-
-        mlflow.log_metric("max_validation_nse_1d_1h", max_validation_NSE_score)
-        mlflow.log_metric("epoch_largest_NSE", int(np.argmax(validation_NSE_scores_mean_1d_1h)))
+        data = load_validated_tensorboard_scalars(run_folder)
+        max_validation_NSE_score, best_epoch = log_tensorboard_metrics_to_mlflow(data)
 
         mlflow.log_artifact(str(config_path), artifact_path="config")
 
@@ -317,4 +294,4 @@ if __name__ == "__main__":
         mlflow.log_metric("best_value", study.best_value)
         mlflow.log_params({f"best/{k}": str(v) for k, v in study.best_trial.params.items()})
         mlflow.set_tag("best_trial_number", study.best_trial.number)
- 
+        

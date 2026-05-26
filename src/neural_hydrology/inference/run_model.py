@@ -19,9 +19,6 @@ from neuralhydrology.utils.config import Config
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Argument parsing
-# ---------------------------------------------------------------------------
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run ensemble inference using a trained NeuralHydrology run.")
     parser.add_argument("--run_dir", type=str, required=True,
@@ -44,9 +41,6 @@ def _parse_ensemble_starttime(value: str | None) -> pd.Timestamp | None:
     return pd.to_datetime(value, format="%Y%m%d%H", utc=True).tz_convert(None)
 
 
-# ---------------------------------------------------------------------------
-# Frequency helpers
-# ---------------------------------------------------------------------------
 def _to_timedelta(freq: str) -> pd.Timedelta:
     if freq.endswith("h"):
         return pd.Timedelta(hours=int(freq[:-1] or "1"))
@@ -78,9 +72,6 @@ def _align_to_frequencies(ts: pd.Timestamp, frequencies: Iterable[str]) -> pd.Ti
     return ts
 
 
-# ---------------------------------------------------------------------------
-# Period inference
-# ---------------------------------------------------------------------------
 def _read_netcdf_date_bounds(time_series_dir: Path) -> tuple[pd.Timestamp, pd.Timestamp]:
     nc_files = sorted(list(time_series_dir.glob("*.nc")) + list(time_series_dir.glob("*.nc4")))
     if not nc_files:
@@ -160,9 +151,6 @@ def _infer_period(
     raise RuntimeError("Could not infer a suitable period within iteration budget.")
 
 
-# ---------------------------------------------------------------------------
-# Dataset
-# ---------------------------------------------------------------------------
 class EnsembleGenericDataset(GenericDataset):
     """`GenericDataset` selecting a single ensemble member via `<var>_<k>` columns."""
 
@@ -202,9 +190,6 @@ class EnsembleGenericDataset(GenericDataset):
         return df
 
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
 def _build_test_config(base_config_path: Path, overrides: dict) -> Config:
     with base_config_path.open() as fp:
         cfg_yaml = yaml.safe_load(fp)
@@ -218,9 +203,6 @@ def _build_test_config(base_config_path: Path, overrides: dict) -> Config:
         temp_path.unlink(missing_ok=True)
 
 
-# ---------------------------------------------------------------------------
-# Result extraction & output
-# ---------------------------------------------------------------------------
 def _extract_simulation_series(xr_ds: xr.Dataset, freq: str, target: str) -> xr.DataArray:
     var = f"{target}_sim"
     if var not in xr_ds:
@@ -266,9 +248,6 @@ def _write_grouped_netcdf(
                 v[:] = values.astype(np.float32, copy=False)
 
 
-# ---------------------------------------------------------------------------
-# Ensemble runner
-# ---------------------------------------------------------------------------
 def _make_ensemble_dataset_factory(ensemble: int):
     def _get_dataset(self, basin_id: str):
         return EnsembleGenericDataset(
@@ -311,26 +290,31 @@ def _run_ensemble_member(
                 per_freq_by_basin[freq].setdefault(basin, {})[f"{target}_sim_{ensemble}"] = np.asarray(da.values)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 def _resolve_seq_dict(value, frequencies: list[str]) -> dict:
     return value if isinstance(value, dict) else {frequencies[0]: value}
 
 
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    )
-    args = _parse_args()
-    run_dir = Path(args.run_dir).resolve()
-    data_dir = Path(args.data_dir).resolve()
-    out_dir = Path(args.out_dir).resolve()
-    basin_file = Path(args.basin_file).resolve() if args.basin_file else (data_dir / "hdsr_polders.txt")
+def run_ensemble_inference(
+    run_dir: Path,
+    data_dir: Path,
+    n_ensembles: int,
+    *,
+    basin_file: Path | None = None,
+    ensemble_starttime: pd.Timestamp | None = None,
+) -> tuple[dict[str, dict[str, dict[str, np.ndarray]]], dict[str, pd.DatetimeIndex], dict]:
+    """
+    Run ensemble inference for one trained model and return in-memory results.
 
-    env = load_env()
-    ensemble_starttime = _parse_ensemble_starttime(env.get("ENSEMBLE_STARTTIME"))
+    Returns ``(per_freq_by_basin, per_freq_datetime, meta)`` where ``meta`` contains
+    ``run_dir``, ``start``, ``end``, ``frequencies``, ``targets``, and ``n_ensembles``.
+    """
+    run_dir = Path(run_dir).resolve()
+    data_dir = Path(data_dir).resolve()
+    resolved_basin = (
+        Path(basin_file).resolve()
+        if basin_file is not None
+        else (data_dir / "hdsr_polders.txt")
+    )
 
     time_series_dir = data_dir / "time_series"
     if not time_series_dir.exists():
@@ -355,9 +339,9 @@ def main() -> None:
 
     cfg = _build_test_config(cfg_base_path, {
         "data_dir": str(data_dir),
-        "test_basin_file": str(basin_file),
-        "train_basin_file": str(basin_file),
-        "validation_basin_file": str(basin_file),
+        "test_basin_file": str(resolved_basin),
+        "train_basin_file": str(resolved_basin),
+        "validation_basin_file": str(resolved_basin),
         "metrics": [],
         "test_start_date": start.strftime("%d/%m/%Y"),
         "test_end_date": end.strftime("%d/%m/%Y"),
@@ -367,13 +351,10 @@ def main() -> None:
     targets = list(cfg.target_variables)
     frequencies = list(cfg.use_frequencies)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # per_freq_by_basin[freq][basin_id][var_name] -> ndarray over datetime
     per_freq_by_basin: dict[str, dict[str, dict[str, np.ndarray]]] = {f: {} for f in frequencies}
     per_freq_datetime: dict[str, pd.DatetimeIndex] = {}
 
-    for k in range(1, int(args.n_ensembles) + 1):
+    for k in range(1, int(n_ensembles) + 1):
         _run_ensemble_member(
             tester,
             ensemble=k,
@@ -383,21 +364,74 @@ def main() -> None:
             per_freq_datetime=per_freq_datetime,
         )
 
-    for freq in frequencies:
-        by_basin = per_freq_by_basin.get(freq, {})
+    meta = {
+        "run_dir": str(run_dir),
+        "start": start,
+        "end": end,
+        "frequencies": frequencies,
+        "targets": targets,
+        "n_ensembles": int(n_ensembles),
+    }
+    return per_freq_by_basin, per_freq_datetime, meta
+
+
+def write_inference_netcdf(
+    out_dir: Path,
+    per_freq_by_basin: dict[str, dict[str, dict[str, np.ndarray]]],
+    per_freq_datetime: dict[str, pd.DatetimeIndex],
+    *,
+    global_attrs: dict[str, str],
+) -> None:
+    """Write grouped ensemble NetCDF files (one file per frequency)."""
+    out_dir = Path(out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for freq, by_basin in per_freq_by_basin.items():
         dt_idx = per_freq_datetime.get(freq)
         if not by_basin or dt_idx is None or len(dt_idx) == 0:
             continue
+        attrs = dict(global_attrs)
+        attrs.setdefault("frequency", str(freq))
         _write_grouped_netcdf(
             out_dir / f"polders_hdsr_{freq}.nc",
             by_basin=by_basin,
             datetime_index=dt_idx,
+            global_attrs=attrs,
+        )
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+    args = _parse_args()
+    run_dir = Path(args.run_dir).resolve()
+    data_dir = Path(args.data_dir).resolve()
+    out_dir = Path(args.out_dir).resolve()
+
+    env = load_env()
+    ensemble_starttime = _parse_ensemble_starttime(env.get("ENSEMBLE_STARTTIME"))
+
+    per_freq_by_basin, per_freq_datetime, meta = run_ensemble_inference(
+        run_dir,
+        data_dir,
+        int(args.n_ensembles),
+        basin_file=Path(args.basin_file).resolve() if args.basin_file else None,
+        ensemble_starttime=ensemble_starttime,
+    )
+
+    for freq in meta["frequencies"]:
+        write_inference_netcdf(
+            out_dir,
+            {freq: per_freq_by_basin.get(freq, {})},
+            {freq: per_freq_datetime.get(freq, pd.DatetimeIndex([]))},
             global_attrs={
-                "run_dir": str(run_dir),
-                "n_ensembles": str(int(args.n_ensembles)),
+                "run_dir": meta["run_dir"],
+                "n_ensembles": str(meta["n_ensembles"]),
                 "frequency": str(freq),
-                "start_date": str(start),
-                "end_date": str(end),
+                "start_date": str(meta["start"]),
+                "end_date": str(meta["end"]),
             },
         )
 
