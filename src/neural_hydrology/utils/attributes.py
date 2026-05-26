@@ -4,7 +4,7 @@ import pandas as pd
 import geopandas as gpd
 
 
-ATTRIBUTES_PATH = Path(__file__).parent.parent / "data" / "attributes" / "polders_data_aangevuld.csv"
+ATTRIBUTES_PATH = Path(__file__).parent.parent.parent.parent / "data" / "attributes" / "polders_data_aangevuld.csv"
 
 def get_area(basin: str) -> float:
     """Get the area of given `basin` from the static attributes csv"""

@@ -19,15 +19,14 @@ def evaluate(
 ) -> Dict:
     """
     Evaluate the model for the given run directory and period, and return a results dict.
-    period must be "train" or "test"
 
     Arguments
     ---------
         run_dir (str | pathlib.Path): Path to the run directory containing ``config.yml``.
-        period (str): Evaluation split; must be ``"train"`` or ``"test"``.
-        basin (str): Basin identifier used to select the basin-specific results.
-        time_resolution (str): Temporal resolution key ("1h" or "1D") used to select results.
-        netcdf_output_file (pathlib.Path): Output path for the resulting NetCDF file.
+        period (str): Evaluation split; must be ``"train"``, ``"validation"``, or ``"test"``.
+        basins (List[str]): List of basin identifiers to evaluate.
+        epoch (int): Model epoch to load for evaluation.
+        config_overrides (dict, optional): Dictionary of config keys to override.
     """
     config_overrides = config_overrides or {}
     run_dir = Path(run_dir)
@@ -85,6 +84,19 @@ def to_netcdf(
     results_xr_dataset = results_xr_dataset.set_index({"datetime": "datetime"})
     results_xr_dataset = results_xr_dataset.drop_vars(['date', 'time_step'])
     results_xr_dataset.to_netcdf(netcdf_output_file)
+
+
+def compute_nse(obs: np.ndarray, sim: np.ndarray) -> float:
+    """Compute Nash-Sutcliffe Efficiency from observed and simulated arrays."""
+    mask = ~np.isnan(obs) & ~np.isnan(sim)
+    obs, sim = obs[mask], sim[mask]
+    if len(obs) == 0:
+        return np.nan
+    numerator = np.sum((obs - sim) ** 2)
+    denominator = np.sum((obs - np.mean(obs)) ** 2)
+    if denominator == 0:
+        return np.nan
+    return 1 - numerator / denominator
 
 
 def get_nse(

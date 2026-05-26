@@ -8,7 +8,6 @@ import numpy as np
 import torch
 from neuralhydrology.nh_run import start_run
 from neuralhydrology.utils.config import Config
-from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
 
 def run_neural_hydrology_model(config_name):
@@ -61,6 +60,8 @@ def extract_tensorboard_scalars(logdir):
         value is the scalar metric value at that epoch.
     """
     scalars = {}
+
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
     # Walk logdir and all subdirectories to find every event file
     for root, dirs, files in os.walk(logdir):
