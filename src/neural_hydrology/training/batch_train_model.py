@@ -193,11 +193,12 @@ def get_basins_from_config(config_path: Path) -> list[str]:
 
 
 def evaluate_and_save(run_dir: Path, config_path: Path, best_epoch: int, run_label: str):
-    """Evaluate the model on the test set and save NetCDF results for all basins.
+    """Evaluate the model on train, validation, and test sets and save NetCDF results.
 
-    Runs the NeuralHydrology evaluation for all basins at the specified epoch,
-    then writes per-basin NetCDF files for both time resolutions (1h and 1D)
-    to EVAL_OUTPUT_DIR / run_label /.
+    Runs the NeuralHydrology evaluation for all basins at the specified epoch
+    for each period (train, validation, test), then writes per-basin NetCDF
+    files for both time resolutions (1h and 1D) to
+    EVAL_OUTPUT_DIR / run_label / period /.
 
     Parameters
     ----------
@@ -214,27 +215,29 @@ def evaluate_and_save(run_dir: Path, config_path: Path, best_epoch: int, run_lab
         'trial_28_retrain_1').
     """
     basins = get_basins_from_config(config_path)
-    output_dir = EVAL_OUTPUT_DIR / run_label
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    results = evaluate(
-        run_dir=run_dir,
-        period="test",
-        basins=basins,
-        epoch=best_epoch,
-    )
+    for period in ("train", "validation", "test"):
+        output_dir = EVAL_OUTPUT_DIR / run_label / period
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    for basin in basins:
-        for time_resolution in ("1h", "1D"):
-            netcdf_path = output_dir / f"{basin}_{time_resolution}.nc"
-            to_netcdf(
-                results_dict=results,
-                basin=basin,
-                time_resolution=time_resolution,
-                netcdf_output_file=netcdf_path,
-            )
+        results = evaluate(
+            run_dir=run_dir,
+            period=period,
+            basins=basins,
+            epoch=best_epoch,
+        )
 
-    print(f"Evaluation results saved to {output_dir}")
+        for basin in basins:
+            for time_resolution in ("1h", "1D"):
+                netcdf_path = output_dir / f"{basin}_{time_resolution}.nc"
+                to_netcdf(
+                    results_dict=results,
+                    basin=basin,
+                    time_resolution=time_resolution,
+                    netcdf_output_file=netcdf_path,
+                )
+
+        print(f"Evaluation results ({period}) saved to {output_dir}")
 
 
 def compute_median_ensemble(run_labels: list[str], basins: list[str]):
@@ -270,7 +273,7 @@ def compute_median_ensemble(run_labels: list[str], basins: list[str]):
             # Load predictions from all models
             datasets = []
             for label in run_labels:
-                nc_path = EVAL_OUTPUT_DIR / label / f"{basin}_{time_resolution}.nc"
+                nc_path = EVAL_OUTPUT_DIR / label / "test" / f"{basin}_{time_resolution}.nc"
                 if nc_path.exists():
                     datasets.append(xr.open_dataset(nc_path))
 

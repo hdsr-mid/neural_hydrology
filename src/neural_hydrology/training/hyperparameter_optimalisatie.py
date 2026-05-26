@@ -1,11 +1,15 @@
 import os
 
+# Prevent TensorFlow (loaded as side-effect on Databricks ML runtime) from
+# grabbing all GPU memory, which conflicts with PyTorch's CUDA context.
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 from pathlib import Path
 import yaml
 import torch
 from neural_hydrology.paths import get_env, get_path, load_env
 from neural_hydrology.utils.training import (
-    get_run_folder_by_name_timestamp,
     load_validated_tensorboard_scalars,
     log_tensorboard_metrics_to_mlflow,
     run_neural_hydrology_model,
