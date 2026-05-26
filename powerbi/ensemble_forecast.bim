@@ -1,0 +1,138 @@
+{
+  "name": "ensemble_forecast",
+  "compatibilityLevel": 1567,
+  "model": {
+    "culture": "nl-NL",
+    "defaultPowerBIDataSourceVersion": "powerBI_V3",
+    "tables": [
+      {
+        "name": "FactEnsemble",
+        "columns": [
+          { "name": "datetime", "dataType": "dateTime", "sourceColumn": "datetime" },
+          { "name": "ensemble_id", "dataType": "int64", "sourceColumn": "ensemble_id" },
+          { "name": "afvoergeb_id", "dataType": "string", "sourceColumn": "afvoergeb_id" },
+          { "name": "value", "dataType": "double", "sourceColumn": "value" }
+        ],
+        "partitions": [
+          {
+            "name": "FactEnsemble",
+            "mode": "import",
+            "source": {
+              "type": "m",
+              "expression": [
+                "let",
+                "    Source = Csv.Document(",
+                "        File.Contents(\"sample_data/output_forecast_sample.csv\"),",
+                "        [Delimiter = \",\", Columns = 4, Encoding = 65001, QuoteStyle = QuoteStyle.None]",
+                "    ),",
+                "    Promoted = Table.PromoteHeaders(Source, [PromoteAllScalars = true]),",
+                "    Typed = Table.TransformColumnTypes(",
+                "        Promoted,",
+                "        {",
+                "            {\"datetime\", type datetime},",
+                "            {\"ensemble_id\", Int64.Type},",
+                "            {\"afvoergeb_id\", type text},",
+                "            {\"value\", type number}",
+                "        }",
+                "    )",
+                "in",
+                "    Typed"
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "FactStats",
+        "columns": [
+          { "name": "datetime", "dataType": "dateTime", "sourceColumn": "datetime" },
+          { "name": "afvoergeb_id", "dataType": "string", "sourceColumn": "afvoergeb_id" },
+          { "name": "p05", "dataType": "double", "sourceColumn": "p05" },
+          { "name": "p25", "dataType": "double", "sourceColumn": "p25" },
+          { "name": "median", "dataType": "double", "sourceColumn": "median" },
+          { "name": "p75", "dataType": "double", "sourceColumn": "p75" },
+          { "name": "p95", "dataType": "double", "sourceColumn": "p95" }
+        ],
+        "partitions": [
+          {
+            "name": "FactStats",
+            "mode": "import",
+            "source": {
+              "type": "m",
+              "expression": [
+                "let",
+                "    Source = FactEnsemble,",
+                "    Grouped = Table.Group(",
+                "        Source,",
+                "        {\"datetime\", \"afvoergeb_id\"},",
+                "        {",
+                "            {",
+                "                \"Stats\",",
+                "                (t as table) =>",
+                "                    let",
+                "                        vals = List.RemoveNulls(t[value])",
+                "                    in",
+                "                        [",
+                "                            p05 = List.Percentile(vals, 0.05),",
+                "                            p25 = List.Percentile(vals, 0.25),",
+                "                            median = List.Percentile(vals, 0.5),",
+                "                            p75 = List.Percentile(vals, 0.75),",
+                "                            p95 = List.Percentile(vals, 0.95)",
+                "                        ],",
+                "                type record",
+                "            }",
+                "        }",
+                "    ),",
+                "    Expanded = Table.ExpandRecordColumn(",
+                "        Grouped, \"Stats\", {\"p05\", \"p25\", \"median\", \"p75\", \"p95\"}",
+                "    )",
+                "in",
+                "    Expanded"
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "DimAfvoergeb",
+        "columns": [
+          { "name": "afvoergeb_id", "dataType": "string", "sourceColumn": "afvoergeb_id" }
+        ],
+        "partitions": [
+          {
+            "name": "DimAfvoergeb",
+            "mode": "import",
+            "source": {
+              "type": "m",
+              "expression": [
+                "let",
+                "    Source = FactEnsemble,",
+                "    Distinct = Table.Distinct(Table.SelectColumns(Source, {\"afvoergeb_id\"}))",
+                "in",
+                "    Distinct"
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "name": "DimAfvoergeb_FactEnsemble",
+        "fromTable": "DimAfvoergeb",
+        "fromColumn": "afvoergeb_id",
+        "toTable": "FactEnsemble",
+        "toColumn": "afvoergeb_id",
+        "crossFilteringBehavior": "bothDirections"
+      },
+      {
+        "name": "DimAfvoergeb_FactStats",
+        "fromTable": "DimAfvoergeb",
+        "fromColumn": "afvoergeb_id",
+        "toTable": "FactStats",
+        "toColumn": "afvoergeb_id",
+        "crossFilteringBehavior": "bothDirections"
+      }
+    ]
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "description": "HDSR ensemble-afvoer: spaghetti + percentielbanden + mediaan (plot_ensemble_forecast.py). Plak in Deneb (JSON) na installatie uit AppSource.",
+  "data": [
+    {
+      "name": "ensemble",
+      "source": "FactEnsemble"
+    },
+    {
+      "name": "stats",
+      "source": "FactStats"
+    }
+  ],
+  "transform": [
+    {
+      "filter": "datum.selectedAfvoergeb == null || datum.afvoergeb_id == datum.selectedAfvoergeb",
+      "calculate": "datum.selectedAfvoergeb",
+      "as": "selectedAfvoergeb"
+    }
+  ],
+  "width": "container",
+  "height": 360,
+  "layer": [
+    {
+      "data": { "name": "ensemble" },
+      "mark": { "type": "line", "opacity": 0.18, "strokeWidth": 1, "color": "#1f77b4" },
+      "encoding": {
+        "x": { "field": "datetime", "type": "temporal", "title": "DatumTijd" },
+        "y": { "field": "value", "type": "quantitative", "title": "Afvoer (mm)" },
+        "detail": { "field": "ensemble_id", "type": "nominal" }
+      }
+    },
+    {
+      "data": { "name": "stats" },
+      "mark": { "type": "area", "opacity": 0.18, "color": "#ff7f0e", "line": false },
+      "encoding": {
+        "x": { "field": "datetime", "type": "temporal" },
+        "y": { "field": "p05", "type": "quantitative" },
+        "y2": { "field": "p95" }
+      }
+    },
+    {
+      "data": { "name": "stats" },
+      "mark": { "type": "area", "opacity": 0.3, "color": "#ff7f0e", "line": false },
+      "encoding": {
+        "x": { "field": "datetime", "type": "temporal" },
+        "y": { "field": "p25", "type": "quantitative" },
+        "y2": { "field": "p75" }
+      }
+    },
+    {
+      "data": { "name": "stats" },
+      "mark": { "type": "line", "strokeWidth": 2.2, "color": "black", "strokeDash": [6, 4] },
+      "encoding": {
+        "x": { "field": "datetime", "type": "temporal" },
+        "y": { "field": "median", "type": "quantitative" }
+      }
+    }
+  ],
+  "config": {
+    "view": { "stroke": "transparent" },
+    "axis": { "labelFontSize": 11, "titleFontSize": 12 }
+  }
+}

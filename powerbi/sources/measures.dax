@@ -1,0 +1,13 @@
+// Paste into FactStats or a dedicated Measures table in Power BI Desktop.
+
+Laatste datetime = MAX ( FactStats[datetime] )
+
+Laatste median afvoer =
+    CALCULATE (
+        MAX ( FactStats[median] ),
+        FactStats[datetime] = [Laatste datetime]
+    )
+
+Aantal ensembleleden = DISTINCTCOUNT ( FactEnsemble[ensemble_id] )
+
+Aantal afvoergebieden = DISTINCTCOUNT ( DimAfvoergeb[afvoergeb_id] )

@@ -6,10 +6,15 @@ data/time_series/*.nc
 
 # Run resultaten en modellen
 runs/
+inference_runs/
 *.pt
 *.log
 data_ens/
-*.env
+
+# Python packaging
+*.egg-info/
+dist/
+build/
 
 # Python cache en temporary files
 __pycache__/
@@ -24,6 +29,9 @@ __pycache__/
 
 # Jupyter notebook checkpoints
 .ipynb_checkpoints/
+
+# Environment variables
+.env
 
 # Large zip files
 *.zip

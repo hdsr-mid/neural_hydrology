@@ -1,0 +1,187 @@
+model Model
+	culture: nl-NL
+	defaultPowerBIDataSourceVersion: powerBI_V3
+	sourceQueryCulture: nl-NL
+
+annotation PBI_QueryOrder = ["FactEnsemble", "FactStats", "DimAfvoergeb"]
+
+annotation __PBI_TimeIntelligenceEnabled = 0
+
+ref table FactEnsemble
+ref table FactStats
+ref table DimAfvoergeb
+
+ref cultureInfo nl-NL
+
+relationship FactEnsemble_afvoergeb_id__DimAfvoergeb_afvoergeb_id
+	fromColumn: FactEnsemble.afvoergeb_id
+	toColumn: DimAfvoergeb.afvoergeb_id
+	crossFilteringBehavior: bothDirections
+
+relationship FactStats_afvoergeb_id__DimAfvoergeb_afvoergeb_id
+	fromColumn: FactStats.afvoergeb_id
+	toColumn: DimAfvoergeb.afvoergeb_id
+	crossFilteringBehavior: bothDirections
+
+table FactEnsemble
+	lineageTag: hdsr-fact-ensemble-001
+
+	column datetime
+		dataType: dateTime
+		formatString: General Date Time
+		lineageTag: hdsr-col-datetime
+		summarizeBy: none
+		sourceColumn: datetime
+
+		annotation SummarizationSetBy = Automatic
+
+	column ensemble_id
+		dataType: int64
+		formatString: 0
+		lineageTag: hdsr-col-ensemble-id
+		summarizeBy: none
+		sourceColumn: ensemble_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column afvoergeb_id
+		dataType: string
+		lineageTag: hdsr-col-afvoergeb-id
+		summarizeBy: none
+		sourceColumn: afvoergeb_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column value
+		dataType: double
+		lineageTag: hdsr-col-value
+		summarizeBy: sum
+		sourceColumn: value
+
+		annotation SummarizationSetBy = Automatic
+
+	partition FactEnsemble = m
+		mode: import
+		source =
+				let
+				    Source = Csv.Document(
+				        File.Contents("../sample_data/output_forecast_sample.csv"),
+				        [Delimiter = ",", Columns = 4, Encoding = 65001, QuoteStyle = QuoteStyle.None]
+				    ),
+				    Promoted = Table.PromoteHeaders(Source, [PromoteAllScalars = true]),
+				    Typed = Table.TransformColumnTypes(
+				        Promoted,
+				        {
+				            {"datetime", type datetime},
+				            {"ensemble_id", Int64.Type},
+				            {"afvoergeb_id", type text},
+				            {"value", type number}
+				        }
+				    ),
+				    Sorted = Table.Sort(
+				        Typed,
+				        {
+				            {"afvoergeb_id", Order.Ascending},
+				            {"ensemble_id", Order.Ascending},
+				            {"datetime", Order.Ascending}
+				        }
+				    )
+				in
+				    Sorted
+
+table FactStats
+	lineageTag: hdsr-fact-stats-001
+
+	column datetime
+		dataType: dateTime
+		formatString: General Date Time
+		lineageTag: hdsr-stats-datetime
+		summarizeBy: none
+		sourceColumn: datetime
+
+	column afvoergeb_id
+		dataType: string
+		lineageTag: hdsr-stats-afvoergeb
+		summarizeBy: none
+		sourceColumn: afvoergeb_id
+
+	column p05
+		dataType: double
+		lineageTag: hdsr-stats-p05
+		summarizeBy: sum
+		sourceColumn: p05
+
+	column p25
+		dataType: double
+		lineageTag: hdsr-stats-p25
+		summarizeBy: sum
+		sourceColumn: p25
+
+	column median
+		dataType: double
+		lineageTag: hdsr-stats-median
+		summarizeBy: sum
+		sourceColumn: median
+
+	column p75
+		dataType: double
+		lineageTag: hdsr-stats-p75
+		summarizeBy: sum
+		sourceColumn: p75
+
+	column p95
+		dataType: double
+		lineageTag: hdsr-stats-p95
+		summarizeBy: sum
+		sourceColumn: p95
+
+	partition FactStats = m
+		mode: import
+		source =
+				let
+				    Source = FactEnsemble,
+				    Grouped = Table.Group(
+				        Source,
+				        {"datetime", "afvoergeb_id"},
+				        {
+				            {
+				                "Stats",
+				                (t as table) =>
+				                    let
+				                        vals = List.RemoveNulls(t[value])
+				                    in
+				                        [
+				                            p05 = List.Percentile(vals, 0.05),
+				                            p25 = List.Percentile(vals, 0.25),
+				                            median = List.Percentile(vals, 0.5),
+				                            p75 = List.Percentile(vals, 0.75),
+				                            p95 = List.Percentile(vals, 0.95)
+				                        ],
+				                type record
+				            }
+				        }
+				    ),
+				    Expanded = Table.ExpandRecordColumn(
+				        Grouped, "Stats", {"p05", "p25", "median", "p75", "p95"}
+				    )
+				in
+				    Expanded
+
+table DimAfvoergeb
+	lineageTag: hdsr-dim-afvoergeb-001
+
+	column afvoergeb_id
+		dataType: string
+		lineageTag: hdsr-dim-afvoergeb-col
+		summarizeBy: none
+		sourceColumn: afvoergeb_id
+
+	partition DimAfvoergeb = m
+		mode: import
+		source =
+				let
+				    Source = FactEnsemble,
+				    Distinct = Table.Distinct(Table.SelectColumns(Source, {"afvoergeb_id"})),
+				    Sorted = Table.Sort(Distinct, {{"afvoergeb_id", Order.Ascending}})
+				in
+				    Sorted
