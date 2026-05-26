@@ -166,33 +166,61 @@ Voor HPO gebruik je `neural_hydrology/scripts/training/hyperparameter_optimalisa
 
 - **MLflow**: het script zet `MLFLOW_TRACKING_URI=databricks` en logt naar een experiment onder `/Shared/...`.
 - **Belangrijke instellingen in het script**:
-- `BASE_CONFIG`: pad naar de basis `config.yml` die per trial wordt aangepast.
-- `OUTPUT_DIR` en `RUNS_DIR`: outputlocaties op een Volume (standaard onder `/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output`).
-- `N_TRIALS`: aantal Optuna trials.
+  - `BASE_CONFIG`: pad naar de basis `config.yml` die per trial wordt aangepast.
+  - `OUTPUT_DIR` en `RUNS_DIR`: outputlocaties op een Volume (standaard onder `/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output`).
+  - `N_TRIALS`: aantal Optuna trials.
 - **Wat er gebeurt**:
-- Per trial wordt een eigen config geschreven en als MLflow artifact gelogd.
-- NeuralHydrology wordt gestart via `start_run(...)`.
-- De output van elke trial komt in een eigen trial-map terecht, met daarbinnen de daadwerkelijke run-folder van NeuralHydrology.
-- De objective leest validatie-metrics uit TensorBoard logs, gebruikt tags zoals `valid/mean_nse_1D` en `valid/mean_nse_1h`, en optimaliseert op de maximale gemiddelde NSE over beide frequenties.
+  - Per trial wordt een eigen config geschreven en als MLflow artifact gelogd.
+  - NeuralHydrology wordt gestart via `run_neural_hydrology_model(config_path)`.
+  - De output van elke trial komt in een eigen trial-map terecht, met daarbinnen de daadwerkelijke run-folder van NeuralHydrology.
+  - De objective leest validatie-metrics uit TensorBoard logs, gebruikt tags zoals `valid/mean_nse_1D` en `valid/mean_nse_1h`, en optimaliseert op de maximale gemiddelde NSE over beide frequenties.
+  - Na alle trials worden hyperparameter-importances en optimization history gelogd naar MLflow.
+  - De Optuna study wordt opgeslagen in een SQLite database op `local_disk0`.
 
 #### Batch retraining van een gekozen HPO-trial
 
-Voor het opnieuw trainen van een specifieke HPO-trial gebruik je `neural_hydrology/scripts/training/batch_train_model.py`:
+Voor het opnieuw trainen van een specifieke HPO-trial met meerdere seeds:
+
+```bash
+python -m neural_hydrology.training.batch_train_model
+```
 
 - **MLflow**: het script zet `MLFLOW_TRACKING_URI=databricks` en logt de retrain-runs naar een apart MLflow experiment.
 - **Belangrijke instellingen in het script**:
-- `EXPERIMENT_NAME`: naam van de HPO-experimentmap onder `.../output/HPO/`.
-- `TRIAL_NAME`: de trial-map die je wilt hertrainen, bijvoorbeeld `trial_28`.
-- `PATH_HPO`: pad naar de HPO-output waarin de gekozen trial staat.
-- `RETRAIN_NAME`: naam/suffix voor de retrain-run(s).
-- `NUMBER_OF_RETRAININGS`: aantal keer dat dezelfde trial opnieuw wordt getraind.
-- `RETRAIN_BASE_DIR` en `DESTINATION_DIR`: outputlocaties voor de gekopieerde run en de nieuwe retrains.
+  - `EXPERIMENT_NAME`: naam van de HPO-experimentmap onder `.../output/HPO/`.
+  - `TRIAL_NAME`: de trial-map die je wilt hertrainen, bijvoorbeeld `trial_28`.
+  - `PATH_HPO`: pad naar de HPO-output waarin de gekozen trial staat.
+  - `NUMBER_OF_RETRAININGS`: aantal keer dat het model opnieuw wordt getraind (met verschillende seeds).
+  - `RETRAIN_BASE_DIR` en `DESTINATION_DIR`: outputlocaties voor de gekopieerde run en de nieuwe retrains.
+  - `EVAL_OUTPUT_DIR`: map waarin evaluatieresultaten (NetCDFs) worden weggeschreven.
 - **Wat er gebeurt**:
-- Het script zoekt eerst de gekozen trial op in de HPO-output en bepaalt de bijbehorende NeuralHydrology run-folder.
-- Die run-folder wordt gekopieerd naar een aparte retrain-locatie.
-- Vervolgens wordt per retraining een nieuwe config geschreven met een nieuw `experiment_name`, maar op basis van de gekozen HPO-trial.
-- NeuralHydrology wordt opnieuw gestart via `start_run(...)`.
-- Na iedere retrain worden de validatie-metrics uit TensorBoard gelezen en in MLflow gelogd, zodat meerdere retrains van dezelfde trial onderling vergeleken kunnen worden.
+  1. Het script kopieert de gekozen trial naar een aparte retrain-locatie.
+  2. Van het originele model worden de validatie-metrics uit TensorBoard gelezen en in MLflow gelogd.
+  3. Het originele model wordt geëvalueerd op train, validation en test set; resultaten worden als NetCDF weggeschreven naar `eval_results/original/{period}/{basin}_{resolution}.nc`.
+  4. Per retraining wordt een nieuwe config geschreven met een aangepaste seed, het model getraind, metrics gelogd, en geëvalueerd op alle drie de perioden.
+  5. Na alle retrains wordt een **median ensemble** berekend: per basin en tijdresolutie wordt de mediaan van de voorspellingen over alle modellen (origineel + retrains) genomen.
+  6. De ensemble-NSE per basin wordt gelogd naar MLflow, samen met gemiddelde en mediaan NSE over alle basins.
+- **Outputstructuur**:
+  ```
+  DESTINATION_DIR/
+  ├── trial_28/                         # Kopie van het originele model
+  ├── retrain_1/                        # Retrain-folder (seed offset 1)
+  │   └── trial_28_retrain_1_.../       # NeuralHydrology run-folder
+  ├── retrain_2/                        # Retrain-folder (seed offset 2)
+  │   └── trial_28_retrain_2_.../
+  ├── ...
+  └── eval_results/
+      ├── original/
+      │   ├── train/{basin}_1h.nc, {basin}_1D.nc
+      │   ├── validation/...
+      │   └── test/...
+      ├── trial_28_retrain_1/
+      │   ├── train/...
+      │   ├── validation/...
+      │   └── test/...
+      ├── ...
+      └── median_ensemble/{basin}_1h.nc, {basin}_1D.nc
+  ```
 
 ### Het maken van verwachtingen met een ensemble van neerslag
 
