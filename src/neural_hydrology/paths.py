@@ -12,13 +12,16 @@ from dotenv import dotenv_values, load_dotenv
 # Databricks/Spark: suppress noisy Py4J bridge logs when scripts set root logging to INFO.
 _PY4J_LOGGERS = ("py4j", "py4j.java_gateway", "py4j.clientserver")
 
+# cfgrib: stale .idx sidecar warnings on every GRIB open (harmless; index is rebuilt).
+_CFGRIB_LOGGERS = ("cfgrib", "cfgrib.messages")
 
-def _suppress_py4j_logging() -> None:
-    for name in _PY4J_LOGGERS:
+
+def _suppress_noisy_third_party_logging() -> None:
+    for name in (*_PY4J_LOGGERS, *_CFGRIB_LOGGERS):
         logging.getLogger(name).setLevel(logging.ERROR)
 
 
-_suppress_py4j_logging()
+_suppress_noisy_third_party_logging()
 
 # Env key -> default path relative to project root (or special handling).
 _PATH_DEFAULTS: dict[str, str] = {
