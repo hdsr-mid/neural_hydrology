@@ -22,6 +22,7 @@ _suppress_py4j_logging()
 
 # Env key -> default path relative to project root (or special handling).
 _PATH_DEFAULTS: dict[str, str] = {
+    #"DATA_DIR": "data",
     "DATA_DIR": "data",
     "DATA_ENS_DIR": "data_ens",
     "INFERENCE_RUNS_DIR": "inference_runs",

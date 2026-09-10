@@ -11,7 +11,9 @@ import urllib.error
 from neural_hydrology.paths import get_path
 from neural_hydrology.preprocessing.meteo.knmi_open_data import KnmiOpenDataClient, KnmiRequestBudgetExceeded
 from neural_hydrology.preprocessing.meteo.radar_hdf5 import (
+    read_knmi_radar_crs,
     read_knmi_radar_h5,
+    read_knmi_radar_timestamp,
     read_polders,
     zonal_mean_precip_mm,
 )
@@ -149,14 +151,30 @@ def import_rtcor_from(
 
     polders = read_polders()
 
+    # Project polders once into the radar CRS (all RTCOR files share the same CRS).
+    # Calling polders.to_crs() inside the loop via zonal_mean_precip_mm accumulates
+    # GEOS C-library memory that is not returned to the OS, causing OOM crashes.
+    first_path = sorted(paths)[0]
+    radar_crs = read_knmi_radar_crs(first_path)
+    polders_radar = polders.to_crs(radar_crs)
+    LOGGER.info("RTCOR: polders projected to radar CRS once (n=%d).", len(polders_radar))
+
     per_step: list[pd.Series] = []
     per_step_time: list[pd.Timestamp] = []
     for p in sorted(paths):
+        # Fast timestamp check from filename — skip opening the HDF5 for out-of-window files.
+        t_fast = read_knmi_radar_timestamp(p)
+        if t_fast is not None:
+            t_pd_fast = pd.Timestamp(t_fast)
+            if t_pd_fast <= start_ts or t_pd_fast > end_ts:
+                continue
+
         grid = read_knmi_radar_h5(p)
         ts = pd.Timestamp(grid.timestamp_utc)
         if ts <= start_ts or ts > end_ts:
             continue
-        s = zonal_mean_precip_mm(grid, polders)
+
+        s = zonal_mean_precip_mm(grid, polders, polders_projected=polders_radar)
         per_step.append(s)
         per_step_time.append(ts)
 
@@ -164,6 +182,7 @@ def import_rtcor_from(
         return RtcorHourlyResult(hourly_mm_by_shape=pd.DataFrame(), source_h5_count=len(paths))
 
     df_5m = pd.DataFrame(per_step, index=pd.DatetimeIndex(per_step_time, tz="UTC")).sort_index()
+    del per_step  # release Series objects before groupby aggregation
     df_5m.index.name = "date_5m_end"
 
     hour_end = df_5m.index.to_series().apply(_hour_end_utc).astype("datetime64[ns, UTC]")
@@ -182,4 +201,3 @@ def import_rtcor_from(
 if __name__ == "__main__":
     # Example: last 7 days
     res = import_rtcor_from(start_exclusive_utc=datetime.now(timezone.utc) - timedelta(days=7))
-

@@ -12,7 +12,9 @@ import re
 from neural_hydrology.paths import get_path
 from neural_hydrology.preprocessing.meteo.knmi_open_data import KnmiOpenDataClient
 from neural_hydrology.preprocessing.meteo.radar_hdf5 import (
+    read_knmi_radar_crs,
     read_knmi_radar_h5,
+    read_knmi_radar_timestamp,
     read_polders,
     zonal_mean_precip_mm,
 )
@@ -114,14 +116,35 @@ def import_mfbs_historical_last_year(*, days: int = 365, end_utc: datetime | Non
 
     polders = read_polders()
 
+    # Project polders once into the radar CRS (all MFBS files share the same CRS).
+    # Doing this inside the loop via polders.to_crs() would call it ~8 880 times and
+    # accumulate GBs of GEOS C-library memory that is not returned to the OS between
+    # calls, eventually causing an OOM crash before HARMONIE processing begins.
+    first_h5 = sorted(all_h5)[0]
+    radar_crs = read_knmi_radar_crs(first_h5)
+    polders_radar = polders.to_crs(radar_crs)
+    LOGGER.info("MFBS: polders projected to radar CRS once (n=%d).", len(polders_radar))
+
     rows: list[pd.Series] = []
     times: list[pd.Timestamp] = []
     for p in sorted(all_h5):
+        # Fast timestamp check from the filename (no file I/O for MFBS files whose
+        # names contain a T<HHMMSS> pattern).  Only load the full ~4 MB grid for
+        # files that fall inside the requested window.
+        t_fast = read_knmi_radar_timestamp(p)
+        if t_fast is not None:
+            t_pd_fast = pd.Timestamp(t_fast)
+            if t_pd_fast < pd.Timestamp(start_utc) or t_pd_fast > pd.Timestamp(end_utc):
+                continue
+
         grid = read_knmi_radar_h5(p)
         t = pd.Timestamp(grid.timestamp_utc)
         if t < pd.Timestamp(start_utc) or t > pd.Timestamp(end_utc):
+            # Safety fallback: timestamp from filename was ambiguous but grid
+            # timestamp puts this file outside the window.
             continue
-        s = zonal_mean_precip_mm(grid, polders)
+
+        s = zonal_mean_precip_mm(grid, polders, polders_projected=polders_radar)
         rows.append(s)
         times.append(t)
 
@@ -129,6 +152,7 @@ def import_mfbs_historical_last_year(*, days: int = 365, end_utc: datetime | Non
         raise RuntimeError("MFBS: no hourly fields found within requested time window after parsing.")
 
     df = pd.DataFrame(rows, index=pd.DatetimeIndex(times, tz="UTC")).sort_index()
+    del rows  # release the ~8 880 Series objects before further processing
     df.index.name = "date"
     last_end = df.index.max().to_pydatetime()
 
@@ -138,4 +162,3 @@ def import_mfbs_historical_last_year(*, days: int = 365, end_utc: datetime | Non
 if __name__ == "__main__":
     res = import_mfbs_historical_last_year(days=365)
     print(res.hourly_mm_by_shape.shape, res.last_endtime_utc)
-

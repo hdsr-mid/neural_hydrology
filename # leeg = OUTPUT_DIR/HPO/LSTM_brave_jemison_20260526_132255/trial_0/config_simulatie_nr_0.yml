@@ -1,0 +1,83 @@
+batch_size: 512
+cache_validation_data: true
+clip_gradient_norm: 1
+clip_targets_to_zero:
+- afvoer
+data_dir: /Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input
+dataset: generic
+device: cuda:0
+dynamic_inputs:
+  1D:
+  - neerslag
+  - straling
+  - temperatuur
+  - verdamping
+  - streefpeil
+  - u
+  - v
+  1h:
+  - neerslag
+  - straling
+  - temperatuur
+  - verdamping
+  - streefpeil
+  - u
+  - v
+dynamics_embedding:
+  activation: linear
+  dropout: 0
+  hiddens:
+  - 16
+  type: fc
+epochs: 5
+experiment_name: development_run_0
+head: regression
+hidden_size: 4
+initial_forget_bias: 3
+learning_rate:
+  0: 0.001
+log_interval: 1
+log_tensorboard: true
+loss: MSE
+metrics:
+- NSE
+model: mtslstm
+optimizer: Adam
+output_activation: linear
+output_dropout: 0.1
+predict_last_n:
+  1D: 1
+  1h: 24
+run_dir: /Workspace/Shared/neural_hydrology/# leeg = OUTPUT_DIR/HPO/LSTM_brave_jemison_20260526_132255/trial_0
+save_train_data: false
+save_validation_results: true
+save_weights_every: 1
+seq_length:
+  1D: 365
+  1h: 336
+shared_mtslstm: false
+static_attributes: null
+statics_embedding:
+  activation: linear
+  dropout: 0
+  hiddens:
+  - 16
+  type: fc
+target_noise_std: 0
+target_variables:
+- afvoer
+test_basin_file: /Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input/hdsr_polders.txt
+test_end_date: 01/01/2023
+test_start_date: 01/01/2021
+train_basin_file: /Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input/hdsr_polders.txt
+train_end_date: 01/01/2019
+train_start_date: 01/01/2017
+use_basin_id_encoding: false
+use_frequencies:
+- 1D
+- 1h
+validate_every: 1
+validate_n_random_basins: 9999
+validation_basin_file: /Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/input/hdsr_polders.txt
+validation_end_date: 01/01/2021
+validation_start_date: 01/01/2019

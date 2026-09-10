@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import tarfile
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -175,7 +176,7 @@ def _open_grib_field(
     level: int,
     time_range_indicator: int,
 ) -> np.ndarray:
-    """Load one GRIB field and return a detached float64 copy (dataset is closed before return)."""
+    """Load one GRIB field and return a detached float32 copy (dataset is closed before return)."""
     filter_by_keys = {
         "indicatorOfParameter": indicator_of_parameter,
         "typeOfLevel": type_of_level,
@@ -190,7 +191,7 @@ def _open_grib_field(
         # cfgrib exposes variable name as 'unknown' for GRIB1 from this centre.
         if "unknown" not in ds:
             raise KeyError(f"Expected 'unknown' var not found in {path.name}. vars={list(ds.data_vars)}")
-        return np.asarray(ds["unknown"].values, dtype=np.float64)
+        return np.asarray(ds["unknown"].values, dtype=np.float32)
 
 
 def _remove_extracted_member_gbs(extract_dir: Path, member_id: int) -> int:
@@ -222,7 +223,7 @@ def _zonal_mean_for_all_polders(grid_values: np.ndarray, polders_4326: gpd.GeoDa
         all_touched=True,
         nodata=-999,
     )
-    return np.array([d.get("mean", np.nan) for d in stats], dtype=float)
+    return np.array([d.get("mean", np.nan) for d in stats], dtype=np.float32)
 
 
 def load_harmonie_ensemble_forecast_by_basin() -> dict[str, dict[str, object]]:
@@ -247,362 +248,377 @@ def load_harmonie_ensemble_forecast_by_basin() -> dict[str, dict[str, object]]:
     LOGGER.info("import_harmonie_ensemble_forecast: start")
 
     data_dir = get_path("DATA_ENS_DIR")
-    tmp_dir = data_dir / "_tmp_harmonie"
-    tmp_dir.mkdir(parents=True, exist_ok=True)
+    # All temporary work (downloads + extractions) goes to local compute storage.
+    tmp_dir = Path(tempfile.mkdtemp(prefix="harmonie_"))
+    # Persistent cache directory: only used when DOWNLOAD_ENSEMBLE=0 to locate pre-existing tars.
+    cache_dir = data_dir / "_tmp_harmonie"
 
-    env = load_env()
-    client = KnmiOpenDataClient.from_neural_hydrology_env().with_request_budget(max_requests=MAX_API_REQUESTS_PER_RUN)
+    try:
+        env = load_env()
+        client = KnmiOpenDataClient.from_neural_hydrology_env().with_request_budget(max_requests=MAX_API_REQUESTS_PER_RUN)
 
-    # ENSEMBLE settings:
-    # - ENSEMBLE_STARTTIME: YYYYMMDDHH (UTC). This is the OLDEST run in the 6-hour rolling window ("hour 1"),
-    #   which should contain members 1..5.
-    # - DOWNLOAD_ENSEMBLE: 1/0. If 0, only use locally present tars in tmp_dir.
-    # Precedence: .env first, then process env, then defaults.
-    compose_start_init = env.get("ENSEMBLE_STARTTIME") or os.environ.get("ENSEMBLE_STARTTIME")  # e.g. "2026040718"
-    download_raw = env.get("DOWNLOAD_ENSEMBLE") or os.environ.get("DOWNLOAD_ENSEMBLE") or "1"
-    download_enabled = download_raw.lower() not in {"0", "false", "no"}
+        # ENSEMBLE settings:
+        # - ENSEMBLE_STARTTIME: YYYYMMDDHH (UTC). This is the OLDEST run in the 6-hour rolling window ("hour 1"),
+        #   which should contain members 1..5.
+        # - DOWNLOAD_ENSEMBLE: 1/0. If 0, only use locally present tars in cache_dir.
+        # Precedence: .env first, then process env, then defaults.
+        compose_start_init = env.get("ENSEMBLE_STARTTIME") or os.environ.get("ENSEMBLE_STARTTIME")  # e.g. "2026040718"
+        download_raw = env.get("DOWNLOAD_ENSEMBLE") or os.environ.get("DOWNLOAD_ENSEMBLE") or "1"
+        download_enabled = download_raw.lower() not in {"0", "false", "no"}
 
-    if "ENSEMBLE_STARTTIME" not in env:
-        LOGGER.warning(
-            "ENSEMBLE_STARTTIME not found in neural_hydrology/.env; "
-            "falling back to process env and then script defaults."
-        )
+        if "ENSEMBLE_STARTTIME" not in env:
+            LOGGER.warning(
+                "ENSEMBLE_STARTTIME not found in neural_hydrology/.env; "
+                "falling back to process env and then script defaults."
+            )
 
-    if download_enabled:
-        LOGGER.info("DOWNLOAD_ENSEMBLE enabled: clearing %s", tmp_dir)
-        for p in tmp_dir.iterdir():
-            if p.is_dir():
-                shutil.rmtree(p, ignore_errors=True)
-            else:
-                try:
-                    p.unlink()
-                except FileNotFoundError:
-                    pass
-
-    latest_p2a: list[str] = []
-    latest_p2b: list[str] = []
-    if download_enabled:
-        try:
-            latest_p2a = _knmi_latest_filenames(client, dataset="harmonie_arome_cy43_p2a", n=48)
-            latest_p2b = _knmi_latest_filenames(client, dataset="harmonie_arome_cy43_p2b", n=48)
-        except KnmiRequestBudgetExceeded as e:
-            raise RuntimeError(f"KNMI request budget exceeded while listing latest files ({e}). Rerun in chunks.") from e
-
-    p2a_by_key = {_parse_tar_init_key(f): f for f in latest_p2a}
-    p2b_by_key = {_parse_tar_init_key(f): f for f in latest_p2b}
-
-    if compose_start_init is None:
-        if not download_enabled:
-            raise RuntimeError("Set ENSEMBLE_STARTTIME when DOWNLOAD_ENSEMBLE=0.")
-        common_keys = sorted(set(p2a_by_key.keys()).intersection(set(p2b_by_key.keys())))
-        if len(common_keys) < 6:
-            raise RuntimeError(f"Not enough common p2a/p2b runs available to compose ensemble: {len(common_keys)}")
-        # Default to the oldest of the last 6 common hours (hour 1)
-        compose_start_init = common_keys[-6]
-
-    start_dt = datetime.strptime(compose_start_init, "%Y%m%d%H").replace(tzinfo=timezone.utc)
-    keys_asc = [(start_dt + timedelta(hours=i)).strftime("%Y%m%d%H") for i in range(0, 6)]
-    inits = [datetime.strptime(k, "%Y%m%d%H").replace(tzinfo=timezone.utc) for k in keys_asc]
-    for a, b in zip(inits, inits[1:]):
-        if b - a != timedelta(hours=1):
-            raise RuntimeError(f"Selected runs are not consecutive ascending hours: {inits}")
-    LOGGER.info("Composition start init (hour 1, UTC, oldest): %s", compose_start_init)
-    LOGGER.info("Composition keys oldest->newest (hour1..hour6, UTC): %s", keys_asc)
-
-    p2a_tars: list[Path] = []
-    p2b_tars: list[Path] = []
-    for hour_number, k in enumerate(keys_asc, start=1):
         if download_enabled:
-            if k not in p2a_by_key or k not in p2b_by_key:
-                raise RuntimeError(f"Cannot find p2a/p2b tar for init {k} in API list.")
+            LOGGER.info("DOWNLOAD_ENSEMBLE enabled: downloading to temp dir %s", tmp_dir)
+
+        latest_p2a: list[str] = []
+        latest_p2b: list[str] = []
+        if download_enabled:
             try:
-                ta = client.download_file(
-                    dataset="harmonie_arome_cy43_p2a",
-                    version=HARMONIE_VERSION,
-                    filename=p2a_by_key[k],
-                    out_dir=tmp_dir,
-                    log_each_download=True,
-                )
-                tb = client.download_file(
-                    dataset="harmonie_arome_cy43_p2b",
-                    version=HARMONIE_VERSION,
-                    filename=p2b_by_key[k],
-                    out_dir=tmp_dir,
-                    log_each_download=True,
-                )
-                p2a_tars.append(ta)
-                p2b_tars.append(tb)
+                latest_p2a = _knmi_latest_filenames(client, dataset="harmonie_arome_cy43_p2a", n=48)
+                latest_p2b = _knmi_latest_filenames(client, dataset="harmonie_arome_cy43_p2b", n=48)
             except KnmiRequestBudgetExceeded as e:
-                raise RuntimeError(f"KNMI request budget exceeded while downloading tar files ({e}). Rerun in chunks.") from e
-        else:
-            p2a_tars.append(tmp_dir / f"harm43_v1_P2a_{k}.tar")
-            p2b_tars.append(tmp_dir / f"harm43_v1_P2b_{k}.tar")
-            if not p2a_tars[-1].exists() or not p2b_tars[-1].exists():
-                raise FileNotFoundError(f"Missing local tar(s) for init {k}: {p2a_tars[-1].name}, {p2b_tars[-1].name}")
-        # Validate immediately after downloading/locating this hour's pair.
-        expected = _expected_batch_for_hour_number(hour_number)
-        ma = _members_in_tar(p2a_tars[-1], tag="meteo")
-        mb = _members_in_tar(p2b_tars[-1], tag="renew")
-        if ma != expected or mb != expected:
-            msg = (
-                "Rolling ensemble misalignment: "
-                f"hour={hour_number} init={k} UTC expected={sorted(expected)} "
-                f"got p2a={sorted(ma)} ({p2a_tars[-1].name}) "
-                f"p2b={sorted(mb)} ({p2b_tars[-1].name}). "
-                "Pick ENSEMBLE_STARTTIME as the oldest hour in the 6-hour window ('hour 1')."
+                raise RuntimeError(f"KNMI request budget exceeded while listing latest files ({e}). Rerun in chunks.") from e
+
+        p2a_by_key = {_parse_tar_init_key(f): f for f in latest_p2a}
+        p2b_by_key = {_parse_tar_init_key(f): f for f in latest_p2b}
+
+        if compose_start_init is None:
+            if not download_enabled:
+                raise RuntimeError("Set ENSEMBLE_STARTTIME when DOWNLOAD_ENSEMBLE=0.")
+            common_keys = sorted(set(p2a_by_key.keys()).intersection(set(p2b_by_key.keys())))
+            if len(common_keys) < 6:
+                raise RuntimeError(f"Not enough common p2a/p2b runs available to compose ensemble: {len(common_keys)}")
+            # Default to the oldest of the last 6 common hours (hour 1)
+            compose_start_init = common_keys[-6]
+
+        start_dt = datetime.strptime(compose_start_init, "%Y%m%d%H").replace(tzinfo=timezone.utc)
+        keys_asc = [(start_dt + timedelta(hours=i)).strftime("%Y%m%d%H") for i in range(0, 6)]
+        inits = [datetime.strptime(k, "%Y%m%d%H").replace(tzinfo=timezone.utc) for k in keys_asc]
+        for a, b in zip(inits, inits[1:]):
+            if b - a != timedelta(hours=1):
+                raise RuntimeError(f"Selected runs are not consecutive ascending hours: {inits}")
+        LOGGER.info("Composition start init (hour 1, UTC, oldest): %s", compose_start_init)
+        LOGGER.info("Composition keys oldest->newest (hour1..hour6, UTC): %s", keys_asc)
+
+        p2a_tars: list[Path] = []
+        p2b_tars: list[Path] = []
+        for hour_number, k in enumerate(keys_asc, start=1):
+            if download_enabled:
+                if k not in p2a_by_key or k not in p2b_by_key:
+                    raise RuntimeError(f"Cannot find p2a/p2b tar for init {k} in API list.")
+                try:
+                    ta = client.download_file(
+                        dataset="harmonie_arome_cy43_p2a",
+                        version=HARMONIE_VERSION,
+                        filename=p2a_by_key[k],
+                        out_dir=tmp_dir,
+                        log_each_download=True,
+                    )
+                    tb = client.download_file(
+                        dataset="harmonie_arome_cy43_p2b",
+                        version=HARMONIE_VERSION,
+                        filename=p2b_by_key[k],
+                        out_dir=tmp_dir,
+                        log_each_download=True,
+                    )
+                    p2a_tars.append(ta)
+                    p2b_tars.append(tb)
+                except KnmiRequestBudgetExceeded as e:
+                    raise RuntimeError(f"KNMI request budget exceeded while downloading tar files ({e}). Rerun in chunks.") from e
+            else:
+                # DOWNLOAD_ENSEMBLE=0: read pre-existing tars from the persistent cache directory.
+                p2a_tars.append(cache_dir / f"harm43_v1_P2a_{k}.tar")
+                p2b_tars.append(cache_dir / f"harm43_v1_P2b_{k}.tar")
+                if not p2a_tars[-1].exists() or not p2b_tars[-1].exists():
+                    raise FileNotFoundError(f"Missing local tar(s) for init {k}: {p2a_tars[-1].name}, {p2b_tars[-1].name}")
+            # Validate immediately after downloading/locating this hour's pair.
+            expected = _expected_batch_for_hour_number(hour_number)
+            ma = _members_in_tar(p2a_tars[-1], tag="meteo")
+            mb = _members_in_tar(p2b_tars[-1], tag="renew")
+            if ma != expected or mb != expected:
+                msg = (
+                    "Rolling ensemble misalignment: "
+                    f"hour={hour_number} init={k} UTC expected={sorted(expected)} "
+                    f"got p2a={sorted(ma)} ({p2a_tars[-1].name}) "
+                    f"p2b={sorted(mb)} ({p2b_tars[-1].name}). "
+                    "Pick ENSEMBLE_STARTTIME as the oldest hour in the 6-hour window ('hour 1')."
+                )
+                LOGGER.error(msg)
+                raise RuntimeError(msg)
+            LOGGER.info(
+                "Validated hour %d (compose init=%s UTC): members=%s",
+                hour_number,
+                k,
+                sorted(expected),
             )
-            LOGGER.error(msg)
-            raise RuntimeError(msg)
-        LOGGER.info(
-            "Validated hour %d (compose init=%s UTC): members=%s",
-            hour_number,
-            k,
-            sorted(expected),
-        )
 
-    # At this point we've validated all 6 hour pairs in order.
-    polders = _read_polders_4326()
-    basin_ids = polders["SHAPE_ID"].astype(str).to_list()
-    affine = _harmonie_affine_transform()
+        # At this point we've validated all 6 hour pairs in order.
+        polders = _read_polders_4326()
+        basin_ids = polders["SHAPE_ID"].astype(str).to_list()
+        affine = _harmonie_affine_transform()
 
-    # Build member->tar mapping (1..30)
-    member_to_p2a: dict[int, Path] = {}
-    member_to_p2b: dict[int, Path] = {}
-    for ta, tb in zip(p2a_tars, p2b_tars):
-        for m in _members_in_tar(ta, tag="meteo"):
-            member_to_p2a[m] = ta
-        for m in _members_in_tar(tb, tag="renew"):
-            member_to_p2b[m] = tb
+        # Build member->tar mapping (1..30)
+        member_to_p2a: dict[int, Path] = {}
+        member_to_p2b: dict[int, Path] = {}
+        for ta, tb in zip(p2a_tars, p2b_tars):
+            for m in _members_in_tar(ta, tag="meteo"):
+                member_to_p2a[m] = ta
+            for m in _members_in_tar(tb, tag="renew"):
+                member_to_p2b[m] = tb
 
-    members = list(range(1, 31))
-    if set(member_to_p2a.keys()) != set(members) or set(member_to_p2b.keys()) != set(members):
-        raise RuntimeError("Could not build full 30-member mapping from the 6 runs.")
+        members = list(range(1, 31))
+        if set(member_to_p2a.keys()) != set(members) or set(member_to_p2b.keys()) != set(members):
+            raise RuntimeError("Could not build full 30-member mapping from the 6 runs.")
 
-    slot_count = 30
+        slot_count = 30
 
-    # Determine valid_time overlap across all members based on init times + lead hours
-    # We assume each tar contains the same set of lead hours.
-    example_members = _list_tar_members(p2a_tars[0], tag="meteo")
-    leads = _unique_lead_hours(example_members)
-    times_per_member: dict[int, np.ndarray] = {}
-    for m in members:
-        # pick any member file name from tar list to parse init, but easier: parse tar init (hour) and assume minute 00.
-        init = _parse_tar_init_time(member_to_p2a[m].name).replace(minute=0)
-        times_per_member[m] = np.array([(init + timedelta(hours=h)).replace(tzinfo=None) for h in leads], dtype="datetime64[ns]")
+        # Determine valid_time overlap across all members based on init times + lead hours
+        # We assume each tar contains the same set of lead hours.
+        example_members = _list_tar_members(p2a_tars[0], tag="meteo")
+        leads = _unique_lead_hours(example_members)
+        times_per_member: dict[int, np.ndarray] = {}
+        for m in members:
+            # pick any member file name from tar list to parse init, but easier: parse tar init (hour) and assume minute 00.
+            init = _parse_tar_init_time(member_to_p2a[m].name).replace(minute=0)
+            times_per_member[m] = np.array([(init + timedelta(hours=h)).replace(tzinfo=None) for h in leads], dtype="datetime64[ns]")
 
-    # Common overlap only (keep everything as datetime64[ns] to avoid dtype mismatches)
-    common_times = set(times_per_member[members[0]].astype("datetime64[ns]").tolist())
-    for m in members[1:]:
-        common_times &= set(times_per_member[m].astype("datetime64[ns]").tolist())
-    times = np.array(sorted(common_times), dtype="datetime64[ns]")
-    t_len = len(times)
-    if t_len == 0:
-        raise RuntimeError("No common overlap in valid times across all members.")
-
-    # KNMI lagged-ensemble documentation: a "full" 30-member ensemble yields 54 forecast hours.
-    # With 6 hourly-staggered runs and lead times typically spanning +00..+60 (inclusive),
-    # the pure intersection often results in 56 valid times (e.g. +05..+60). We trim one hour
-    # on both ends to match the documented 54-hour horizon (e.g. +06..+59).
-    if t_len == 56:
-        times = times[1:-1]
+        # Common overlap only (keep everything as datetime64[ns] to avoid dtype mismatches)
+        common_times = set(times_per_member[members[0]].astype("datetime64[ns]").tolist())
+        for m in members[1:]:
+            common_times &= set(times_per_member[m].astype("datetime64[ns]").tolist())
+        times = np.array(sorted(common_times), dtype="datetime64[ns]")
         t_len = len(times)
-    if t_len != 54:
-        LOGGER.warning("Expected 54 time steps per KNMI docs, got %d. Proceeding anyway.", t_len)
+        if t_len == 0:
+            raise RuntimeError("No common overlap in valid times across all members.")
 
-    # Prepare per-basin arrays (time, slot)
-    def make_var():
-        return np.full((t_len, slot_count), np.nan, dtype=float)
+        # KNMI lagged-ensemble documentation: a "full" 30-member ensemble yields 54 forecast hours.
+        # With 6 hourly-staggered runs and lead times typically spanning +00..+60 (inclusive),
+        # the pure intersection often results in 56 valid times (e.g. +05..+60). We trim one hour
+        # on both ends to match the documented 54-hour horizon (e.g. +06..+59).
+        if t_len == 56:
+            times = times[1:-1]
+            t_len = len(times)
+        if t_len != 54:
+            LOGGER.warning("Expected 54 time steps per KNMI docs, got %d. Proceeding anyway.", t_len)
 
-    per_basin: dict[str, dict[str, np.ndarray]] = {bid: {} for bid in basin_ids}
-    for bid in basin_ids:
-        per_basin[bid]["neerslag"] = make_var()
-        per_basin[bid]["temperatuur"] = make_var()
-        per_basin[bid]["u"] = make_var()
-        per_basin[bid]["v"] = make_var()
-        per_basin[bid]["straling_j_m2_h"] = make_var()  # internal hourly increment J/m²
+        # Prepare per-basin arrays (time, slot)
+        def make_var():
+            return np.full((t_len, slot_count), np.nan, dtype=np.float32)
 
-    extract_p2a = tmp_dir / "extract_p2a_composed"
-    extract_p2b = tmp_dir / "extract_p2b_composed"
-    extract_p2a.mkdir(parents=True, exist_ok=True)
-    extract_p2b.mkdir(parents=True, exist_ok=True)
+        per_basin: dict[str, dict[str, np.ndarray]] = {bid: {} for bid in basin_ids}
+        for bid in basin_ids:
+            per_basin[bid]["neerslag"] = make_var()
+            per_basin[bid]["temperatuur"] = make_var()
+            per_basin[bid]["u"] = make_var()
+            per_basin[bid]["v"] = make_var()
+            per_basin[bid]["straling_j_m2_h"] = make_var()  # internal hourly increment J/m²
 
-    # Extract only files needed for members 1..30 and lead hours in the overlap window.
-    # First find needed lead hours for overlap (relative to each member init).
-    lead_set = set(leads)
+        extract_p2a = tmp_dir / "extract_p2a_composed"
+        extract_p2b = tmp_dir / "extract_p2b_composed"
+        extract_p2a.mkdir(parents=True, exist_ok=True)
+        extract_p2b.mkdir(parents=True, exist_ok=True)
 
-    # Read and zonal-average per lead time for each available member.
-    for mid in members:
-        slot = mid - 1
-        LOGGER.info("Processing composed member %s into slot %s", mid, slot + 1)
+        # Extract only files needed for members 1..30 and lead hours in the overlap window.
+        # First find needed lead hours for overlap (relative to each member init).
+        lead_set = set(leads)
 
-        # Collect cumulative precipitation (mm) and temperature, u, v per lead
-        # We'll build in local lead order then subset to overlap times.
-        precip_cum_full = np.full((len(leads), len(basin_ids)), np.nan, dtype=float)
-        temp_c_full = np.full((len(leads), len(basin_ids)), np.nan, dtype=float)
-        wind_u_full = np.full((len(leads), len(basin_ids)), np.nan, dtype=float)
-        wind_v_full = np.full((len(leads), len(basin_ids)), np.nan, dtype=float)
-        rad_cum_full = np.full((len(leads), len(basin_ids)), np.nan, dtype=float)
+        # Read and zonal-average per lead time for each available member.
+        for mid in members:
+            slot = mid - 1
+            LOGGER.info("Processing composed member %s into slot %s", mid, slot + 1)
 
-        # Extract needed GB files for this member from its tar(s)
-        ta = member_to_p2a[mid]
-        tb = member_to_p2b[mid]
-        members_a = _list_tar_members(ta, tag="meteo")
-        members_b = _list_tar_members(tb, tag="renew")
-        need_names_a: list[str] = []
-        for n in members_a:
-            member_id, _, lead = _parse_member_and_step(n)
-            if member_id == mid and lead in lead_set:
-                need_names_a.append(n)
-        need_names_b: list[str] = []
-        for n in members_b:
-            member_id, _, lead = _parse_member_and_step(n)
-            if member_id == mid and lead in lead_set:
-                need_names_b.append(n)
-        _extract_selected_members(ta, extract_p2a, need_names_a)
-        _extract_selected_members(tb, extract_p2b, need_names_b)
+            # Collect cumulative precipitation (mm) and temperature, u, v per lead
+            # We'll build in local lead order then subset to overlap times.
+            precip_cum_full = np.full((len(leads), len(basin_ids)), np.nan, dtype=np.float32)
+            temp_c_full = np.full((len(leads), len(basin_ids)), np.nan, dtype=np.float32)
+            wind_u_full = np.full((len(leads), len(basin_ids)), np.nan, dtype=np.float32)
+            wind_v_full = np.full((len(leads), len(basin_ids)), np.nan, dtype=np.float32)
+            rad_cum_full = np.full((len(leads), len(basin_ids)), np.nan, dtype=np.float32)
 
-        # Index extracted files for this member
-        idx_a: dict[tuple[int, int], Path] = {}
-        for p in extract_p2a.glob("*_GB"):
-            mid2, _, lead = _parse_member_and_step(p.name)
-            if mid2 == mid:
-                idx_a[(mid2, lead)] = p
-        idx_b: dict[tuple[int, int], Path] = {}
-        for p in extract_p2b.glob("*_GB"):
-            mid2, _, lead = _parse_member_and_step(p.name)
-            if mid2 == mid:
-                idx_b[(mid2, lead)] = p
+            # Extract needed GB files for this member from its tar(s)
+            ta = member_to_p2a[mid]
+            tb = member_to_p2b[mid]
+            members_a = _list_tar_members(ta, tag="meteo")
+            members_b = _list_tar_members(tb, tag="renew")
+            need_names_a: list[str] = []
+            #LOGGER.info("Check 1")
+            for n in members_a:
+                member_id, _, lead = _parse_member_and_step(n)
+                if member_id == mid and lead in lead_set:
+                    need_names_a.append(n)
+                #LOGGER.info("Check 2")
+            need_names_b: list[str] = []
+            for n in members_b:
+                member_id, _, lead = _parse_member_and_step(n)
+                if member_id == mid and lead in lead_set:
+                    need_names_b.append(n)
+                #LOGGER.info("Check 3")
+            #LOGGER.info("Check einde for loop check 3")
+            _extract_selected_members(ta, extract_p2a, need_names_a)
+            #LOGGER.info("Check 4_a")
+            _extract_selected_members(tb, extract_p2b, need_names_b)
+            #LOGGER.info("Check 4_b")
 
-        for li, lead in enumerate(leads):
-            f_meteo = idx_a.get((mid, lead))
-            f_renew = idx_b.get((mid, lead))
-            if f_meteo is None or f_renew is None:
-                continue
+            # Index extracted files for this member
+            idx_a: dict[tuple[int, int], Path] = {}
+            for p in extract_p2a.glob("*_GB"):
+                mid2, _, lead = _parse_member_and_step(p.name)
+                if mid2 == mid:
+                    idx_a[(mid2, lead)] = p
+                #LOGGER.info("Check 5")
+            idx_b: dict[tuple[int, int], Path] = {}
+            for p in extract_p2b.glob("*_GB"):
+                mid2, _, lead = _parse_member_and_step(p.name)
+                if mid2 == mid:
+                    idx_b[(mid2, lead)] = p
+                #LOGGER.info("Check 6")
 
-            # precipitation cumulative (indicator 181, TRI 4, heightAboveGround level 0)
-            p_vals = _open_grib_field(
-                f_meteo, indicator_of_parameter=181, type_of_level="heightAboveGround", level=0, time_range_indicator=4
-            )
-            # temperature at 2m (indicator 11, TRI 0)
-            t_vals = _open_grib_field(
-                f_meteo, indicator_of_parameter=11, type_of_level="heightAboveGround", level=2, time_range_indicator=0
-            )
-            # u/v at 10m (33/34, TRI 0)
-            u_vals = _open_grib_field(
-                f_meteo, indicator_of_parameter=33, type_of_level="heightAboveGround", level=10, time_range_indicator=0
-            )
-            v_vals = _open_grib_field(
-                f_meteo, indicator_of_parameter=34, type_of_level="heightAboveGround", level=10, time_range_indicator=0
-            )
-            # global radiation cumulative (indicator 117, TRI 4) from p2b
-            r_vals = _open_grib_field(
-                f_renew, indicator_of_parameter=117, type_of_level="heightAboveGround", level=0, time_range_indicator=4
-            )
+            for li, lead in enumerate(leads):
+                f_meteo = idx_a.get((mid, lead))
+                f_renew = idx_b.get((mid, lead))
+                if f_meteo is None or f_renew is None:
+                    continue
 
-            # Diagnostics: NaNs can originate from source fields or be introduced by zonal-mean/missing leads.
-            if np.isnan(p_vals).any():
-                nan_frac = float(np.isnan(p_vals).mean())
-                LOGGER.warning(
-                    "Source precip field contains NaNs: member=%s lead=+%02dh file=%s nan_frac=%.4f",
-                    mid,
-                    lead,
-                    f_meteo.name,
-                    nan_frac,
+                # precipitation cumulative (indicator 181, TRI 4, heightAboveGround level 0)
+                p_vals = _open_grib_field(
+                    f_meteo, indicator_of_parameter=181, type_of_level="heightAboveGround", level=0, time_range_indicator=4
                 )
-            precip_mean = _zonal_mean_for_all_polders(p_vals, polders, affine)
-            if np.isnan(precip_mean).any():
-                nan_frac = float(np.isnan(precip_mean).mean())
-                LOGGER.warning(
-                    "Zonal-mean precip has NaNs: member=%s lead=+%02dh file=%s nan_frac=%.4f",
-                    mid,
-                    lead,
-                    f_meteo.name,
-                    nan_frac,
+                precip_mean = _zonal_mean_for_all_polders(p_vals, polders, affine)
+                del p_vals  # free grid memory immediately
+
+                # temperature at 2m (indicator 11, TRI 0)
+                t_vals = _open_grib_field(
+                    f_meteo, indicator_of_parameter=11, type_of_level="heightAboveGround", level=2, time_range_indicator=0
                 )
-            precip_cum_full[li, :] = precip_mean
-            tvals = _zonal_mean_for_all_polders(t_vals, polders, affine)
-            # Convert K -> C if values look like Kelvin
-            if np.nanmean(tvals) > 100:
-                tvals = tvals - 273.15
-            temp_c_full[li, :] = tvals
-            wind_u_full[li, :] = _zonal_mean_for_all_polders(u_vals, polders, affine)
-            wind_v_full[li, :] = _zonal_mean_for_all_polders(v_vals, polders, affine)
-            if np.isnan(r_vals).any():
-                nan_frac = float(np.isnan(r_vals).mean())
-                LOGGER.warning(
-                    "Source radiation field contains NaNs: member=%s lead=+%02dh file=%s nan_frac=%.4f",
-                    mid,
-                    lead,
-                    f_renew.name,
-                    nan_frac,
+                tvals = _zonal_mean_for_all_polders(t_vals, polders, affine)
+                del t_vals  # free grid memory immediately
+
+                # u/v at 10m (33/34, TRI 0)
+                u_vals = _open_grib_field(
+                    f_meteo, indicator_of_parameter=33, type_of_level="heightAboveGround", level=10, time_range_indicator=0
                 )
-            rad_mean = _zonal_mean_for_all_polders(r_vals, polders, affine)
-            if np.isnan(rad_mean).any():
-                nan_frac = float(np.isnan(rad_mean).mean())
-                LOGGER.warning(
-                    "Zonal-mean radiation has NaNs: member=%s lead=+%02dh file=%s nan_frac=%.4f",
-                    mid,
-                    lead,
-                    f_renew.name,
-                    nan_frac,
+                u_mean = _zonal_mean_for_all_polders(u_vals, polders, affine)
+                del u_vals  # free grid memory immediately
+
+                v_vals = _open_grib_field(
+                    f_meteo, indicator_of_parameter=34, type_of_level="heightAboveGround", level=10, time_range_indicator=0
                 )
-            rad_cum_full[li, :] = rad_mean
+                v_mean = _zonal_mean_for_all_polders(v_vals, polders, affine)
+                del v_vals  # free grid memory immediately
 
-        # Convert cumulative -> hourly increments (time axis is hourly)
-        precip_inc_full = np.vstack([np.full((1, len(basin_ids)), np.nan), np.diff(precip_cum_full, axis=0)])
-        rad_inc_full = np.vstack([np.full((1, len(basin_ids)), np.nan), np.diff(rad_cum_full, axis=0)])
-        # Negative increments can occur due to cumulative resets/misalignment.
-        # For downstream consumers we clip these to 0 instead of marking them missing.
-        precip_inc_full = np.where(precip_inc_full < 0, 0.0, precip_inc_full)
-        rad_inc_full = np.where(rad_inc_full < 0, 0.0, rad_inc_full)
+                # global radiation cumulative (indicator 117, TRI 4) from p2b
+                r_vals = _open_grib_field(
+                    f_renew, indicator_of_parameter=117, type_of_level="heightAboveGround", level=0, time_range_indicator=4
+                )
+                rad_mean = _zonal_mean_for_all_polders(r_vals, polders, affine)
+                del r_vals  # free grid memory immediately
 
-        # Diagnostics: if we missed lead files, cumulative arrays will remain NaN.
-        missing_leads = int(np.isnan(precip_cum_full).all(axis=1).sum())
-        if missing_leads:
-            LOGGER.warning("Missing lead files for member=%s: %d/%d leads unresolved", mid, missing_leads, len(leads))
+                # Diagnostics: NaNs can originate from source fields or be introduced by zonal-mean/missing leads.
+                if np.isnan(precip_mean).any():
+                    nan_frac = float(np.isnan(precip_mean).mean())
+                    LOGGER.warning(
+                        "Zonal-mean precip has NaNs: member=%s lead=+%02dh file=%s nan_frac=%.4f",
+                        mid,
+                        lead,
+                        f_meteo.name,
+                        nan_frac,
+                    )
+                precip_cum_full[li, :] = precip_mean
+                # Convert K -> C if values look like Kelvin
+                if np.nanmean(tvals) > 100:
+                    tvals = tvals - 273.15
+                temp_c_full[li, :] = tvals
+                wind_u_full[li, :] = u_mean
+                wind_v_full[li, :] = v_mean
+                if np.isnan(rad_mean).any():
+                    nan_frac = float(np.isnan(rad_mean).mean())
+                    LOGGER.warning(
+                        "Zonal-mean radiation has NaNs: member=%s lead=+%02dh file=%s nan_frac=%.4f",
+                        mid,
+                        lead,
+                        f_renew.name,
+                        nan_frac,
+                    )
+                rad_cum_full[li, :] = rad_mean
+                #LOGGER.info("Check 7")
 
-        # Subset to overlap times (use numpy datetime64 comparisons)
-        member_times_full = times_per_member[mid].astype("datetime64[ns]")
-        keep_mask = np.isin(member_times_full, times)
-        precip_inc = precip_inc_full[keep_mask, :]
-        rad_inc = rad_inc_full[keep_mask, :]
-        temp_c = temp_c_full[keep_mask, :]
-        wind_u = wind_u_full[keep_mask, :]
-        wind_v = wind_v_full[keep_mask, :]
+                # Free zonal-mean intermediates
+                del precip_mean, tvals, u_mean, v_mean, rad_mean
 
-        # Store into per-basin arrays for this slot
-        for bi, bid in enumerate(basin_ids):
-            per_basin[bid]["neerslag"][:, slot] = precip_inc[:, bi]
-            per_basin[bid]["temperatuur"][:, slot] = temp_c[:, bi]
-            per_basin[bid]["u"][:, slot] = wind_u[:, bi]
-            per_basin[bid]["v"][:, slot] = wind_v[:, bi]
-            per_basin[bid]["straling_j_m2_h"][:, slot] = rad_inc[:, bi]
+                # Periodic garbage collection to combat memory fragmentation
+                if li % 10 == 9:
+                    gc.collect()
 
-        removed_a = _remove_extracted_member_gbs(extract_p2a, mid)
-        removed_b = _remove_extracted_member_gbs(extract_p2b, mid)
-        gc.collect()
-        LOGGER.debug(
-            "Freed extracted GB for member %s (%d p2a + %d p2b files removed)",
-            mid,
-            removed_a,
-            removed_b,
-        )
+            # Convert cumulative -> hourly increments (time axis is hourly)
+            precip_inc_full = np.vstack([np.full((1, len(basin_ids)), np.nan, dtype=np.float32), np.diff(precip_cum_full, axis=0)])
+            rad_inc_full = np.vstack([np.full((1, len(basin_ids)), np.nan, dtype=np.float32), np.diff(rad_cum_full, axis=0)])
+            # Negative increments can occur due to cumulative resets/misalignment.
+            # For downstream consumers we clip these to 0 instead of marking them missing.
+            precip_inc_full = np.where(precip_inc_full < 0, 0.0, precip_inc_full).astype(np.float32)
+            rad_inc_full = np.where(rad_inc_full < 0, 0.0, rad_inc_full).astype(np.float32)
+            #LOGGER.info("Check 8")
 
-    out: dict[str, dict[str, object]] = {}
-    date_index = pd.DatetimeIndex(pd.to_datetime(times))
-    for bid in basin_ids:
-        data = per_basin[bid]
-        out[bid] = {
-            "date": date_index,
-            "neerslag": data["neerslag"].astype(np.float32),
-            "temperatuur": data["temperatuur"].astype(np.float32),
-            "u": data["u"].astype(np.float32),
-            "v": data["v"].astype(np.float32),
-            "straling": (data["straling_j_m2_h"] / 1e4).astype(np.float32),
-        }
+            # Diagnostics: if we missed lead files, cumulative arrays will remain NaN.
+            missing_leads = int(np.isnan(precip_cum_full).all(axis=1).sum())
+            if missing_leads:
+                LOGGER.warning("Missing lead files for member=%s: %d/%d leads unresolved", mid, missing_leads, len(leads))
 
-    LOGGER.info("Done. Built HARMONIE ensembles for %d basins (time=%d, members=30).", len(out), len(date_index))
-    return out
+            # Subset to overlap times (use numpy datetime64 comparisons)
+            member_times_full = times_per_member[mid].astype("datetime64[ns]")
+            keep_mask = np.isin(member_times_full, times)
+            precip_inc = precip_inc_full[keep_mask, :]
+            rad_inc = rad_inc_full[keep_mask, :]
+            temp_c = temp_c_full[keep_mask, :]
+            wind_u = wind_u_full[keep_mask, :]
+            wind_v = wind_v_full[keep_mask, :]
+            #LOGGER.info("Check 9")
+
+            # Store into per-basin arrays for this slot
+            for bi, bid in enumerate(basin_ids):
+                per_basin[bid]["neerslag"][:, slot] = precip_inc[:, bi]
+                per_basin[bid]["temperatuur"][:, slot] = temp_c[:, bi]
+                per_basin[bid]["u"][:, slot] = wind_u[:, bi]
+                per_basin[bid]["v"][:, slot] = wind_v[:, bi]
+                per_basin[bid]["straling_j_m2_h"][:, slot] = rad_inc[:, bi]
+
+            # Free intermediate arrays for this member before moving to next
+            del precip_cum_full, temp_c_full, wind_u_full, wind_v_full, rad_cum_full
+            del precip_inc_full, rad_inc_full, precip_inc, rad_inc, temp_c, wind_u, wind_v
+
+            removed_a = _remove_extracted_member_gbs(extract_p2a, mid)
+            removed_b = _remove_extracted_member_gbs(extract_p2b, mid)
+            gc.collect()
+            LOGGER.debug(
+                "Freed extracted GB for member %s (%d p2a + %d p2b files removed)",
+                mid,
+                removed_a,
+                removed_b,
+            )
+
+        out: dict[str, dict[str, object]] = {}
+        date_index = pd.DatetimeIndex(pd.to_datetime(times))
+        for bid in basin_ids:
+            data = per_basin[bid]
+            out[bid] = {
+                "date": date_index,
+                "neerslag": data["neerslag"].astype(np.float32),
+                "temperatuur": data["temperatuur"].astype(np.float32),
+                "u": data["u"].astype(np.float32),
+                "v": data["v"].astype(np.float32),
+                "straling": (data["straling_j_m2_h"] / 1e4).astype(np.float32),
+            }
+
+        LOGGER.info("Done. Built HARMONIE ensembles for %d basins (time=%d, members=30).", len(out), len(date_index))
+        return out
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        LOGGER.debug("Cleaned up temp dir %s", tmp_dir)
 
 
 def import_harmonie_ensemble_forecast() -> None:

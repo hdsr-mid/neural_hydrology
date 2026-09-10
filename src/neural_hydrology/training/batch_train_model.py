@@ -1,4 +1,10 @@
 import os
+import sys
+
+# Ensure workspace source takes precedence over the cluster library installation
+_ws_src = "/Workspace/Shared/neural_hydrology/src"
+if _ws_src not in sys.path:
+    sys.path.insert(0, _ws_src)
 
 from pathlib import Path
 import shutil
@@ -25,10 +31,10 @@ mlflow_uri = get_env("MLFLOW_TRACKING_URI", "databricks")
 if mlflow_uri:
     os.environ["MLFLOW_TRACKING_URI"] = mlflow_uri
 
-EXPERIMENT_NAME = "runs" # "LSTM_wonderful_williamson_20260407_124224"
-TRIAL_NAME = "trial_28"
+EXPERIMENT_NAME = "LSTM_focused_buck_20260415_091445" # "LSTM_wonderful_williamson_20260407_124224" "LSTM_focused_buck_20260415_091445"
+TRIAL_NAME = "trial_26"
 PATH_HPO = get_path("HPO_OUTPUT_DIR") / EXPERIMENT_NAME
-NUMBER_OF_RETRAININGS = 4
+NUMBER_OF_RETRAININGS = 10
 
 RETRAIN_BASE_DIR = get_path("RETRAIN_BASE_DIR")
 DESTINATION_DIR = RETRAIN_BASE_DIR / f"{EXPERIMENT_NAME}_{TRIAL_NAME}"

@@ -1,11 +1,15 @@
 import os
 
+# Prevent TensorFlow (loaded as side-effect on Databricks ML runtime) from
+# grabbing all GPU memory, which conflicts with PyTorch's CUDA context.
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 from pathlib import Path
 import yaml
 import torch
 from neural_hydrology.paths import get_env, get_path, load_env
 from neural_hydrology.utils.training import (
-    get_run_folder_by_name_timestamp,
     load_validated_tensorboard_scalars,
     log_tensorboard_metrics_to_mlflow,
     run_neural_hydrology_model,
@@ -29,7 +33,7 @@ if mlflow_uri:
 
 NAME = generate_name()
 EXPERIMENT_NAME = f"LSTM_{NAME}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-N_TRIALS = 50
+N_TRIALS = 4 #50
 BASE_CONFIG = str(get_path("BASE_CONFIG"))
 OUTPUT_DIR = get_path("OUTPUT_DIR")
 RUNS_DIR = get_path("HPO_OUTPUT_DIR") / EXPERIMENT_NAME
@@ -223,9 +227,9 @@ def objective(trial):
         trial_dir.mkdir(parents=True, exist_ok=True)
 
         config["run_dir"] = str(trial_dir)
-        config['hidden_size'] = 64
-        # config['train_start_date'] = '01/01/2017'
-        # config['epochs'] = 20
+        config['hidden_size'] = 4 #64
+        config['train_start_date'] = '01/01/2017'
+        config['epochs'] = 5
 
         # dropout, also apply to the embedding networks
         dropout = trial.suggest_categorical('dropout', [0.1, 0.2, 0.3, 0.4])
