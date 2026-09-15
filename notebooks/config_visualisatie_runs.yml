@@ -1,0 +1,30 @@
+version: 1
+runs:
+  experiment_folder: LSTM_focused_buck_20260415_091445_2_trial_26
+  names:
+  - retrain_10/trial_26_retrain_10_1604_123425
+  - retrain_9/trial_26_retrain_9_1604_121255
+evaluation:
+  device: cpu
+  periods:
+  - validation
+  - test
+  cache_subdir: evaluation_cache
+  evaluate_if_cache_missing: true
+  epoch_selection:
+    metric_1d: valid/mean_nse_1d
+    metric_1h: valid/mean_nse_1h
+    combine: mean
+  model_selection_frequency: 1h
+export:
+  year: 2022
+  prediction_filename: ml_discharge_2022_best_model.csv
+  candidate_filename: ml_discharge_2022_candidate_with_diagnostics.csv
+  diagnostics_filename: ml_discharge_2022_diagnostics.csv
+  expected_hours_per_basin: 8760
+visualization:
+  default_area: AFVG50
+  dataset: test
+  start: '2022-01-01'
+  end: '2022-02-01'
+  cumulative_downsample: 1D
