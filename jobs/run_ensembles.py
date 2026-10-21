@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -48,6 +50,23 @@ from neural_hydrology.paths import (
 LOGGER = logging.getLogger(__name__)
 DEFAULT_N_ENSEMBLES = 30
 
+SKIP_BASINS_KEY = "SKIP_BASINS"
+
+
+def _filtered_basin_file(original: Path, skip: set[str]) -> Path | None:
+    """Write a temp basin file excluding *skip* IDs. Return None if nothing to skip."""
+    if not skip:
+        return None
+    basins = [b.strip() for b in original.read_text().splitlines() if b.strip()]
+    kept = [b for b in basins if b not in skip]
+    skipped = sorted(skip & set(basins))
+    if not skipped:
+        return None
+    LOGGER.info("Skipping %d basin(s): %s", len(skipped), ", ".join(skipped))
+    tmp = original.parent / "hdsr_polders_filtered.txt"
+    tmp.write_text("\n".join(kept) + "\n")
+    return tmp
+
 
 def main() -> None:
     logging.basicConfig(
@@ -60,6 +79,10 @@ def main() -> None:
     out_dir = get_path("INFERENCE_RUNS_DIR")
     n_ensembles = int(get_env("N_ENSEMBLES", str(DEFAULT_N_ENSEMBLES)) or DEFAULT_N_ENSEMBLES)
     ensemble_starttime = _parse_ensemble_starttime(load_env().get("ENSEMBLE_STARTTIME"))
+
+    skip_raw = get_env(SKIP_BASINS_KEY, "") or ""
+    skip_basins = {b.strip() for b in skip_raw.split(",") if b.strip()}
+    basin_file = _filtered_basin_file(data_dir / "hdsr_polders.txt", skip_basins)
 
     LOGGER.info(
         "Starting bagged ensemble inference (bagging_n_models=%s, n_ensembles=%s, "
@@ -81,6 +104,7 @@ def main() -> None:
             data_dir,
             n_ensembles,
             ensemble_starttime=ensemble_starttime,
+            basin_file=basin_file,
         )
         model_outputs.append(output)
         LOGGER.info(
@@ -93,19 +117,24 @@ def main() -> None:
     bagged, bagged_dt = median_bag_predictions(model_outputs)
     meta = model_outputs[0][2]
 
-    write_inference_netcdf(
-        out_dir,
-        bagged,
-        bagged_dt,
-        global_attrs={
-            "bagging_n_models": str(BAGGING_N_MODELS),
-            "bagging_method": "median",
-            "run_dirs": ",".join(str(p) for p in run_dirs),
-            "n_ensembles": str(n_ensembles),
-            "start_date": str(meta["start"]),
-            "end_date": str(meta["end"]),
-        },
-    )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        write_inference_netcdf(
+            tmp_path,
+            bagged,
+            bagged_dt,
+            global_attrs={
+                "bagging_n_models": str(BAGGING_N_MODELS),
+                "bagging_method": "median",
+                "run_dirs": ",".join(str(p) for p in run_dirs),
+                "n_ensembles": str(n_ensembles),
+                "start_date": str(meta["start"]),
+                "end_date": str(meta["end"]),
+            },
+        )
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for nc_file in tmp_path.glob("*.nc"):
+            shutil.copy2(nc_file, out_dir / nc_file.name)
 
     LOGGER.info(
         "Bagged ensemble inference complete in %.1fs -> %s",

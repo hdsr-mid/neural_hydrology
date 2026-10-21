@@ -33,7 +33,7 @@ if mlflow_uri:
 
 NAME = generate_name()
 EXPERIMENT_NAME = f"LSTM_{NAME}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-N_TRIALS = 4 #50
+N_TRIALS = 50
 BASE_CONFIG = str(get_path("BASE_CONFIG"))
 OUTPUT_DIR = get_path("OUTPUT_DIR")
 RUNS_DIR = get_path("HPO_OUTPUT_DIR") / EXPERIMENT_NAME
@@ -186,6 +186,7 @@ def generate_static_attributes_HPO(trial):
         + static_variables_peil
         + static_variables_infiltratie_permeabiliteit
     )
+    return static_variables
 
 def objective(trial):
     """Optuna objective function for hyperparameter optimization of the LSTM model.
@@ -227,9 +228,9 @@ def objective(trial):
         trial_dir.mkdir(parents=True, exist_ok=True)
 
         config["run_dir"] = str(trial_dir)
-        config['hidden_size'] = 4 #64
-        config['train_start_date'] = '01/01/2017'
-        config['epochs'] = 5
+        config['hidden_size'] = 64
+        config['train_start_date'] = '01/01/2014'
+        config['epochs'] = 75
 
         # dropout, also apply to the embedding networks
         dropout = trial.suggest_categorical('dropout', [0.1, 0.2, 0.3, 0.4])

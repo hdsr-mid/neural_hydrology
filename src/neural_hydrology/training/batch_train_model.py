@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 
 # Ensure workspace source takes precedence over the cluster library installation
 _ws_src = "/Workspace/Shared/neural_hydrology/src"
@@ -31,8 +32,8 @@ mlflow_uri = get_env("MLFLOW_TRACKING_URI", "databricks")
 if mlflow_uri:
     os.environ["MLFLOW_TRACKING_URI"] = mlflow_uri
 
-EXPERIMENT_NAME = "LSTM_focused_buck_20260415_091445" # "LSTM_wonderful_williamson_20260407_124224" "LSTM_focused_buck_20260415_091445"
-TRIAL_NAME = "trial_26"
+EXPERIMENT_NAME =  "LSTM_focused_galileo_20260929_075613" # "LSTM_focused_buck_20260415_091445" # "LSTM_wonderful_williamson_20260407_124224" "LSTM_focused_buck_20260415_091445"
+TRIAL_NAME = "trial_46" # "trial_35" # "trial_26"
 PATH_HPO = get_path("HPO_OUTPUT_DIR") / EXPERIMENT_NAME
 NUMBER_OF_RETRAININGS = 10
 
@@ -233,12 +234,18 @@ def evaluate_and_save(run_dir: Path, config_path: Path, best_epoch: int, run_lab
     for basin in basins:
         for time_resolution in ("1h", "1D"):
             netcdf_path = output_dir / f"{basin}_{time_resolution}.nc"
-            to_netcdf(
-                results_dict=results,
-                basin=basin,
-                time_resolution=time_resolution,
-                netcdf_output_file=netcdf_path,
-            )
+            with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as _tmp:
+                _tmp_path = Path(_tmp.name)
+            try:
+                to_netcdf(
+                    results_dict=results,
+                    basin=basin,
+                    time_resolution=time_resolution,
+                    netcdf_output_file=_tmp_path,
+                )
+                shutil.copy2(str(_tmp_path), str(netcdf_path))
+            finally:
+                _tmp_path.unlink(missing_ok=True)
 
     print(f"Evaluation results saved to {output_dir}")
 
@@ -299,7 +306,13 @@ def compute_median_ensemble(run_labels: list[str], basins: list[str]):
 
             # Save median ensemble NetCDF
             nc_out = ensemble_dir / f"{basin}_{time_resolution}.nc"
-            median_ds.to_netcdf(nc_out)
+            with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as _tmp:
+                _tmp_path = Path(_tmp.name)
+            try:
+                median_ds.to_netcdf(_tmp_path)
+                shutil.copy2(str(_tmp_path), str(nc_out))
+            finally:
+                _tmp_path.unlink(missing_ok=True)
 
             # Compute NSE: 1 - sum((pred - obs)^2) / sum((obs - mean(obs))^2)
             if pred_vars and obs_vars:
@@ -337,7 +350,7 @@ def main():
     3. Evaluates the original model on the test set and saves NetCDF results.
     4. Retrains the model NUMBER_OF_RETRAININGS times with different random
        seeds, logging metrics and saving evaluation results for each.
-    5. Computes the median ensemble prediction across all 5 models (original +
+    5. Computes the median ensemble prediction across all X models (original +
        4 retrains) and logs the ensemble NSE to MLflow.
     """
     source_trial_dir = PATH_HPO / TRIAL_NAME
@@ -416,7 +429,7 @@ def main():
                 mlflow.log_artifact(str(config_path), artifact_path="config")
                 evaluate_and_save(run_folder, config_path, best_epoch, experiment_name)
 
-        # Compute median ensemble from all 5 models
+        # Compute median ensemble from all X models
         run_labels = ["original"] + [
             f"{TRIAL_NAME}_retrain_{i + 1}" for i in range(NUMBER_OF_RETRAININGS)
         ]

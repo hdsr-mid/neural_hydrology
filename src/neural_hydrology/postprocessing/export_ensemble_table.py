@@ -1,9 +1,8 @@
 """Export grouped ensemble NetCDF inference output to a long-format Unity Catalog table."""
 
-from typing import Literal
-
-
 from __future__ import annotations
+
+from typing import Literal
 
 import logging
 from pathlib import Path

@@ -391,6 +391,10 @@ def create_timeseries_files(
         streef_arr = _constant_member_array(int(ds.sizes["date"]), streef_val)
         _add_member_vars(ds, "streefpeil", streef_arr, units="mNAP")
 
+        #TEMP add constant value for verdamping
+        verdamping = _constant_member_array(int(ds.sizes["date"]), 0.0)
+        _add_member_vars(ds, "verdamping", verdamping, units="mm")
+
         out_path = out_dir / f"{bid}.nc"
         ds.to_netcdf(out_path)
 
