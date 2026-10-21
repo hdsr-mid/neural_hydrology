@@ -14,6 +14,9 @@ import pandas as pd
 import xarray as xr
 
 from neural_hydrology.paths import get_path
+from neural_hydrology.preprocessing.meteo.import_knmi_ev24_cabauw import (
+    load_knmi_ev24_cabauw_hourly,
+)
 from neural_hydrology.preprocessing.meteo.import_knmi_station_cabauw import (
     load_knmi_station_cabauw_hourly,
 )
@@ -33,6 +36,9 @@ RTCOR_MAX_DOWNLOADS = 100
 
 # Max. gap (uren) voor korte interpolatie meteo; ook drempel voor WARNING bij lange ontbrekende periodes neerslag.
 METEO_INTERP_LIMIT_HOURS = 3
+
+# Verdamping (EV24): langere interp dan meteo (dagproduct, vaak ~1 dag vertraagd), daarna ffill/bfill.
+VERDAMPING_INTERP_LIMIT_HOURS = 72
 
 
 def _dedupe_subsumed_nan_segments(
@@ -193,6 +199,54 @@ def _constant_member_array(n_times: int, value: float, n_ens: int = 30) -> np.nd
     return np.full((n_times, n_ens), value, dtype=np.float32)
 
 
+def _add_verdamping_persisted(
+    ds: xr.Dataset,
+    *,
+    hist_verdamping: pd.Series,
+    basin_label: str | None = None,
+) -> None:
+    """
+    Add verdamping_1..30 over the full master timeline (hist ∪ forecast).
+
+    Same Cabauw EV24 series for all basins. No HARMONIE ET: after short linear
+    interpolation (VERDAMPING_INTERP_LIMIT_HOURS), remaining NaNs (incl. forecast
+    hours and late hist lag) are filled with forward- then back-fill (last-value
+    persistence). Not NaN→0 (unlike neerslag).
+    """
+    master = pd.DatetimeIndex(pd.to_datetime(ds["date"].values)).tz_localize(None)
+    if hist_verdamping is None or hist_verdamping.empty:
+        raise RuntimeError(
+            f"Historical verdamping (KNMI EV24 Cabauw) is empty; cannot build ensemble for {basin_label or '?'}."
+        )
+
+    det = pd.Series(
+        hist_verdamping.values,
+        index=_to_naive_utc_index(pd.DatetimeIndex(hist_verdamping.index)),
+    ).sort_index()
+    det_master = det.reindex(master, copy=False)
+    ens = _expand_det_to_ens(det_master.to_numpy(dtype=np.float32), n_ens=30)
+
+    _warn_nan_gaps_exceed_limit(
+        master,
+        ens,
+        variable="verdamping",
+        limit_hours=float(VERDAMPING_INTERP_LIMIT_HOURS),
+        basin_label=basin_label,
+    )
+    ens = _interpolate_meteo_2d_short_gaps(ens, limit=VERDAMPING_INTERP_LIMIT_HOURS)
+
+    for j in range(ens.shape[1]):
+        s = pd.Series(ens[:, j])
+        ens[:, j] = s.ffill().bfill().to_numpy(dtype=np.float32)
+
+    if np.isnan(ens).any():
+        raise RuntimeError(
+            f"Verdamping still contains NaN after interp/ffill/bfill for gebied={basin_label or '?'}."
+        )
+
+    _add_member_vars(ds, "verdamping", ens.astype(np.float32), units="mm")
+
+
 def _new_ds(date: np.ndarray) -> xr.Dataset:
     enc = ExampleEncoding()
     ds = xr.Dataset(coords={"date": ("date", date.astype("datetime64[ns]"))})
@@ -315,6 +369,11 @@ def create_timeseries_files(
     if df_meteo.empty:
         raise RuntimeError("Cabauw historical meteo loader returned empty DataFrame.")
 
+    LOGGER.info("Loading historical Cabauw EV24 verdamping (days=%s)...", days)
+    ser_verdamping = load_knmi_ev24_cabauw_hourly(days=days)
+    if ser_verdamping.empty:
+        raise RuntimeError("Cabauw EV24 verdamping loader returned empty Series.")
+
     LOGGER.info(
         "Loading historical radar precipitation (days=%s, RTCOR_MAX_DOWNLOADS=%s)...",
         days,
@@ -391,9 +450,8 @@ def create_timeseries_files(
         streef_arr = _constant_member_array(int(ds.sizes["date"]), streef_val)
         _add_member_vars(ds, "streefpeil", streef_arr, units="mNAP")
 
-        #TEMP add constant value for verdamping
-        verdamping = _constant_member_array(int(ds.sizes["date"]), 0.0)
-        _add_member_vars(ds, "verdamping", verdamping, units="mm")
+        # Same Cabauw EV24 for all basins; forecast hours via last-value persistence.
+        _add_verdamping_persisted(ds, hist_verdamping=ser_verdamping, basin_label=str(bid))
 
         out_path = out_dir / f"{bid}.nc"
         ds.to_netcdf(out_path)

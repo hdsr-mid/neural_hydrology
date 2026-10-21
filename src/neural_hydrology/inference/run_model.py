@@ -329,13 +329,6 @@ def run_ensemble_inference(
     seq_length = _resolve_seq_dict(base_cfg.seq_length, frequencies)
     predict_last_n = _resolve_seq_dict(base_cfg.predict_last_n, frequencies)
 
-    ## TEMP: strip 'verdamping' from dynamic inputs (not available in forecast ensembles)
-    #_di = base_cfg.dynamic_inputs
-    #if isinstance(_di, dict):
-    #    _di = {k: [v for v in vs if v != "verdamping"] for k, vs in _di.items()}
-    #else:
-    #    _di = [v for v in _di if v != "verdamping"]
-
     start, end = _infer_period(
         time_series_dir=time_series_dir,
         frequencies=frequencies,
@@ -352,8 +345,6 @@ def run_ensemble_inference(
         "metrics": [],
         "test_start_date": start.strftime("%d/%m/%Y"),
         "test_end_date": end.strftime("%d/%m/%Y"),
-        #"dynamic_inputs": base_cfg.dynamic_inputs,
-        #"dynamic_inputs": _di,  # TEMP: verdamping excluded
     })
 
     tester = get_tester(cfg=cfg, run_dir=run_dir, period="test", init_model=True)
