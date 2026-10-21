@@ -359,8 +359,14 @@ def create_timeseries_files(
     if missing_cfg is None:
         missing_cfg = MissingDataConfig()
 
-    #data_dir = get_path("DATA_ENS_DIR")
-    data_dir = Path("/local_disk0/neural_hydrology/data_ens")
+    # Databricks: write NetCDF to fast local disk first; locally /local_disk0 is absent.
+    local_disk0 = Path("/local_disk0")
+    if local_disk0.is_dir():
+        data_dir = local_disk0 / "neural_hydrology" / "data_ens"
+        LOGGER.info("Using Databricks local disk for NetCDF writes: %s", data_dir)
+    else:
+        data_dir = get_path("DATA_ENS_DIR")
+        LOGGER.info("local_disk0 not found; using DATA_ENS_DIR: %s", data_dir)
     out_dir = data_dir / "time_series"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -456,16 +462,21 @@ def create_timeseries_files(
         out_path = out_dir / f"{bid}.nc"
         ds.to_netcdf(out_path)
 
-    # Copy completed NetCDF files from local disk to the Volume (DATA_ENS_DIR/time_series).
-    # Writing directly to the Volume is not supported (not POSIX-compliant), so files are
-    # written to local_disk0 first and then copied here as plain byte streams.
+    # Databricks: copy from local_disk0 to Volume (DATA_ENS_DIR). Skip when already the same
+    # directory (local Mac / when DATA_ENS_DIR was used for writes).
     vol_out_dir = get_path("DATA_ENS_DIR") / "time_series"
-    vol_out_dir.mkdir(parents=True, exist_ok=True)
-    nc_files = sorted(out_dir.glob("*.nc"))
-    LOGGER.info("Copying %d NetCDF file(s) to Volume: %s ...", len(nc_files), vol_out_dir)
-    for nc_file in nc_files:
-        shutil.copy2(nc_file, vol_out_dir / nc_file.name)
-    LOGGER.info("Done. %d file(s) written to %s.", len(nc_files), vol_out_dir)
+    if out_dir.resolve() == vol_out_dir.resolve():
+        LOGGER.info(
+            "Skip Volume copy: write dir and DATA_ENS_DIR/time_series are the same (%s).",
+            out_dir,
+        )
+    else:
+        vol_out_dir.mkdir(parents=True, exist_ok=True)
+        nc_files = sorted(out_dir.glob("*.nc"))
+        LOGGER.info("Copying %d NetCDF file(s) to Volume: %s ...", len(nc_files), vol_out_dir)
+        for nc_file in nc_files:
+            shutil.copy2(nc_file, vol_out_dir / nc_file.name)
+        LOGGER.info("Done. %d file(s) written to %s.", len(nc_files), vol_out_dir)
 
 
 def _parse_args() -> argparse.Namespace:
