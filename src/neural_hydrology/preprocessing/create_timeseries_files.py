@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import cfgrib  # fail fast: verify gribapi C library loads before 80 min of work
+#print("Check if newest version is running")
+
 import argparse
 import logging
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
@@ -301,7 +305,8 @@ def create_timeseries_files(
     if missing_cfg is None:
         missing_cfg = MissingDataConfig()
 
-    data_dir = get_path("DATA_ENS_DIR")
+    #data_dir = get_path("DATA_ENS_DIR")
+    data_dir = Path("/local_disk0/neural_hydrology/data_ens")
     out_dir = data_dir / "time_series"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -347,7 +352,7 @@ def create_timeseries_files(
 
     # Historical deterministic series (same for all basins except precipitation)
     hist_date = pd.DatetimeIndex(df_meteo.index)
-
+    print("Check start loading neerslag")
     for bid in basin_ids:
         # neerslag deterministic is basin-specific
         if df_precip_by_shape.empty or bid not in df_precip_by_shape.columns.astype(str).tolist():
@@ -386,10 +391,23 @@ def create_timeseries_files(
         streef_arr = _constant_member_array(int(ds.sizes["date"]), streef_val)
         _add_member_vars(ds, "streefpeil", streef_arr, units="mNAP")
 
+        #TEMP add constant value for verdamping
+        verdamping = _constant_member_array(int(ds.sizes["date"]), 0.0)
+        _add_member_vars(ds, "verdamping", verdamping, units="mm")
+
         out_path = out_dir / f"{bid}.nc"
         ds.to_netcdf(out_path)
 
-    LOGGER.info("Done.")
+    # Copy completed NetCDF files from local disk to the Volume (DATA_ENS_DIR/time_series).
+    # Writing directly to the Volume is not supported (not POSIX-compliant), so files are
+    # written to local_disk0 first and then copied here as plain byte streams.
+    vol_out_dir = get_path("DATA_ENS_DIR") / "time_series"
+    vol_out_dir.mkdir(parents=True, exist_ok=True)
+    nc_files = sorted(out_dir.glob("*.nc"))
+    LOGGER.info("Copying %d NetCDF file(s) to Volume: %s ...", len(nc_files), vol_out_dir)
+    for nc_file in nc_files:
+        shutil.copy2(nc_file, vol_out_dir / nc_file.name)
+    LOGGER.info("Done. %d file(s) written to %s.", len(nc_files), vol_out_dir)
 
 
 def _parse_args() -> argparse.Namespace:

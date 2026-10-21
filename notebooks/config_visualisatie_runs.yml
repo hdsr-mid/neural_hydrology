@@ -1,0 +1,39 @@
+version: 1
+runs:
+  experiment_folder: LSTM_focused_galileo_20260929_075613_trial_35
+  names:
+  - retrain_1/trial_35_retrain_1_3009_083347
+  - retrain_2/trial_35_retrain_2_3009_085610
+  - retrain_3/trial_35_retrain_3_3009_091859
+  - retrain_4/trial_35_retrain_4_3009_094205
+  - retrain_5/trial_35_retrain_5_3009_100543
+  - retrain_6/trial_35_retrain_6_3009_102930
+  - retrain_7/trial_35_retrain_7_3009_105310
+  - retrain_8/trial_35_retrain_8_3009_111701
+  - retrain_9/trial_35_retrain_9_3009_114109
+  - retrain_10/trial_35_retrain_10_3009_120514
+  - trial_35/development_run_35_2909_211537
+evaluation:
+  device: cpu
+  periods:
+  - validation
+  - test
+  cache_subdir: evaluation_cache
+  evaluate_if_cache_missing: true
+  epoch_selection:
+    metric_1d: valid/mean_nse_1d
+    metric_1h: valid/mean_nse_1h
+    combine: mean
+  model_selection_frequency: 1h
+export:
+  year: 2022
+  prediction_filename: ml_discharge_2022_best_model.csv
+  candidate_filename: ml_discharge_2022_candidate_with_diagnostics.csv
+  diagnostics_filename: ml_discharge_2022_diagnostics.csv
+  expected_hours_per_basin: 8760
+visualization:
+  default_area: AFVG50
+  dataset: test
+  start: '2022-01-01'
+  end: '2022-02-01'
+  cumulative_downsample: 1D

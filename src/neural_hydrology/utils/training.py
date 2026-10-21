@@ -217,3 +217,42 @@ def log_tensorboard_metrics_to_mlflow(data, run_folder=None):
 
     best_epoch = int(np.argmax(validation_NSE_scores_mean_1d_1h)) + 1
     return max_validation_NSE_score, best_epoch
+
+
+def get_run_folder_by_name_timestamp(trial_dir, experiment_name):
+    """Find the NeuralHydrology run folder by experiment name prefix.
+
+    After training, NeuralHydrology creates a subfolder inside the run
+    directory with the naming pattern ``<experiment_name>_DDMMYYYY_HHMMSS``.
+    This function locates that folder by matching the experiment name prefix
+    and returns the most recent match (sorted lexicographically by name).
+
+    Parameters
+    ----------
+    trial_dir : str or Path
+        Directory that contains the NeuralHydrology run subfolder(s).
+    experiment_name : str
+        The experiment name used during training. Used as prefix to match
+        the run subfolder.
+
+    Returns
+    -------
+    Path
+        Path to the matched run folder.
+
+    Raises
+    ------
+    RuntimeError
+        If no subfolder starting with ``experiment_name`` is found.
+    """
+    trial_dir = Path(trial_dir)
+    matches = sorted(
+        [d for d in trial_dir.iterdir() if d.is_dir() and d.name.startswith(experiment_name)],
+        key=lambda d: d.name,
+    )
+    if not matches:
+        raise RuntimeError(
+            f"No run folder starting with '{experiment_name}' found in {trial_dir}. "
+            f"Contents: {[f.name for f in trial_dir.iterdir()]}"
+        )
+    return matches[-1]

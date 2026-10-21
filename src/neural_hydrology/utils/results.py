@@ -1,3 +1,4 @@
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Dict, List
@@ -83,7 +84,13 @@ def to_netcdf(
     )
     results_xr_dataset = results_xr_dataset.set_index({"datetime": "datetime"})
     results_xr_dataset = results_xr_dataset.drop_vars(['date', 'time_step'])
-    results_xr_dataset.to_netcdf(netcdf_output_file)
+    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as _tmp:
+        _tmp_path = Path(_tmp.name)
+    try:
+        results_xr_dataset.to_netcdf(_tmp_path)
+        shutil.copy2(str(_tmp_path), str(netcdf_output_file))
+    finally:
+        _tmp_path.unlink(missing_ok=True)
 
 
 def compute_nse(obs: np.ndarray, sim: np.ndarray) -> float:

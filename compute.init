@@ -1,0 +1,15 @@
+#!/bin/bash
+
+# Install system eccodes C library built for Ubuntu 24.04.
+# The ecmwflibs-bundled libeccodes triggers an OpenSSL FIPS self-test failure
+# on DBR >15.4 (Ubuntu 24.04) because the bundled binary was compiled against
+# an older OpenSSL whose FIPS HMAC integrity check fails in the new environment.
+apt-get update -q && apt-get install -y -q libeccodes0 libeccodes-dev
+
+# Compile eccodes Python bindings from source so they link to the system
+# libeccodes above instead of pulling in the ecmwflibs binary bundle.
+pip install --no-binary :all: eccodes
+
+# Install the full package (cfgrib and remaining deps).
+# eccodes is already satisfied above, so pip skips it and won't reinstall a binary wheel.
+pip install /Workspace/Shared/neural_hydrology

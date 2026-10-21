@@ -114,6 +114,41 @@ def _timestamp_from_filename(path: Path) -> datetime | None:
     return None
 
 
+def read_knmi_radar_timestamp(path: Path) -> datetime | None:
+    """
+    Read the timestamp from a KNMI radar HDF5 without loading pixel data.
+
+    Tries filename parsing first (no I/O).  Falls back to opening the HDF5 and
+    reading only /overview attrs — still no pixel data is loaded.
+    """
+    t = _timestamp_from_filename(path)
+    if t is not None:
+        return t
+    try:
+        with h5py.File(path, mode="r") as f:
+            return _timestamp_from_overview_attrs(f)
+    except Exception:
+        return None
+
+
+def read_knmi_radar_crs(path: Path) -> str:
+    """
+    Read the normalised PROJ.4 CRS string from a KNMI radar HDF5 without loading
+    pixel data.  Used to project polders once before a processing loop over many files
+    that all share the same radar CRS (e.g. all MFBS files).
+    """
+    with h5py.File(path, mode="r") as f:
+        proj4_params = (
+            f["geographic"]["map_projection"]
+            .attrs["projection_proj4_params"]
+            .tobytes()
+            .split(b"\x00")[0]
+            .decode("ascii")
+        )
+    proj4_params_norm, _ = _normalize_radar_proj4_and_scale(proj4_params)
+    return proj4_params_norm
+
+
 def read_knmi_radar_h5(path: Path) -> RadarGrid:
     """
     Read KNMI radar HDF5 to precipitation grid in mm (accumulation for product interval).
@@ -198,14 +233,31 @@ def read_polders() -> gpd.GeoDataFrame:
     return gdf
 
 
-def zonal_mean_precip_mm(grid: RadarGrid, polders: gpd.GeoDataFrame) -> pd.Series:
+def zonal_mean_precip_mm(
+    grid: RadarGrid,
+    polders: gpd.GeoDataFrame,
+    *,
+    polders_projected: gpd.GeoDataFrame | None = None,
+) -> pd.Series:
     """
     Compute mean precipitation over each polygon.
 
     Returns a Series indexed by SHAPE_ID with float values (mm).
+
+    Parameters
+    ----------
+    grid : RadarGrid
+        The radar grid to sample from.
+    polders : gpd.GeoDataFrame
+        Polder polygons in any CRS.  Only used when *polders_projected* is None.
+    polders_projected : gpd.GeoDataFrame, optional
+        Polder polygons already reprojected to the radar CRS.  When supplied,
+        the ``polders.to_crs()`` call is skipped entirely — pass this when
+        calling this function in a loop over many files that share the same
+        radar CRS to avoid thousands of redundant reprojections and the
+        associated GEOS C-library memory accumulation.
     """
-    radar_crs = grid.crs_proj4
-    p = polders.to_crs(radar_crs)
+    p = polders_projected if polders_projected is not None else polders.to_crs(grid.crs_proj4)
     # rasterstats expects array oriented with row 0 as top row; from_origin matches that.
     stats = zonal_stats(
         p,
@@ -217,4 +269,3 @@ def zonal_mean_precip_mm(grid: RadarGrid, polders: gpd.GeoDataFrame) -> pd.Serie
     )
     vals = np.array([d.get("mean", np.nan) for d in stats], dtype=float)
     return pd.Series(vals, index=p["SHAPE_ID"].astype(str).to_list(), name="neerslag_mm")
-

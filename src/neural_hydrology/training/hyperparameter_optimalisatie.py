@@ -186,6 +186,7 @@ def generate_static_attributes_HPO(trial):
         + static_variables_peil
         + static_variables_infiltratie_permeabiliteit
     )
+    return static_variables
 
 def objective(trial):
     """Optuna objective function for hyperparameter optimization of the LSTM model.
@@ -228,8 +229,8 @@ def objective(trial):
 
         config["run_dir"] = str(trial_dir)
         config['hidden_size'] = 64
-        # config['train_start_date'] = '01/01/2017'
-        # config['epochs'] = 20
+        config['train_start_date'] = '01/01/2014'
+        config['epochs'] = 75
 
         # dropout, also apply to the embedding networks
         dropout = trial.suggest_categorical('dropout', [0.1, 0.2, 0.3, 0.4])
