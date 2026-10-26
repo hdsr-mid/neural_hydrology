@@ -8,8 +8,8 @@ Het project bevat experimenten met verschillende LSTM varianten voor het voorspe
 
 **Twee workflows:**
 
-- **Experiment / training** — HPO en retrain op Databricks (MLflow + Optuna), output in `runs/` of Volumes.
-- **Operationeel** — KNMI-preprocessing → ensemble-inference (5-model bagging) → Unity Catalog → Power BI.
+- **Experiment / training**: HPO en retrain op Databricks (MLflow + Optuna), output in `runs/` of Volumes.
+- **Operationeel**: KNMI-preprocessing → ensemble-inference (5-model bagging) → Unity Catalog → Power BI.
 
 ## Projectstructuur
 
@@ -22,10 +22,12 @@ neural_hydrology/                    # Git repo-root
 ├── config.yml                       # NeuralHydrology run-config
 ├── requirements.txt
 ├── .env.example
+├── compute.init                     # Init-script voor Databricks compute (eccodes/cfgrib)
 ├── jobs/                            # Entrypoints voor Databricks Jobs (ook lokaal)
 │   ├── preprocess_ensembles.py
 │   ├── run_ensembles.py
 │   └── postprocess_ensembles.py
+├── app/                             # Dash-app voor visualisatie (Databricks App, zie app/README.md)
 ├── data/                            # Voorbeeld-/trainingsdata (zie data/README.md)
 ├── data_ens/                        # Operationele ensemble-input
 ├── runs/                            # Modelruns (lokaal, gitignored)
@@ -35,13 +37,13 @@ neural_hydrology/                    # Git repo-root
 └── src/
     └── neural_hydrology/            # Python package (pip install -e .)
         ├── paths.py                 # Pad- en .env-resolutie
-        ├── preprocessing/
-        ├── training/
-        ├── inference/
+        ├── preprocessing/           # Ensemble-tijdreeksen (meteo/ bevat de KNMI-loaders), afvoer smoothen, peilvariabiliteit
+        ├── training/                # HPO en retrain
+        ├── inference/               # Inference (run_model.py) en mediaan-bagging (bagging.py)
         ├── postprocessing/
         ├── analysis/
         ├── viz/
-        └── utils/
+        └── utils/                   # Training-wrapper, evaluatie (results.py), attributen, ruwe afvoer
 ```
 
 ## Datasets
@@ -52,7 +54,7 @@ Het project werkt met 40 afvoergebieden van HDSR. De lijst staat in `data/hdsr_p
 
 ### Data bestanden
 
-- **Attributes**: `data/attributes/polders_data_aangevuld.csv` — gebiedskenmerken (operationeel: `data_ens/attributes/`)
+- **Attributes**: `data/attributes/polders_data_aangevuld.csv`: gebiedskenmerken (operationeel: `data_ens/attributes/`)
 - **Time series**: NetCDF (`.nc`) per polder onder `data/time_series/` (training) en `data_ens/time_series/` (operationeel)
 - **Voorbeelden**: alleen AFVG1, AFVG13 en AFVG15 zijn meegeleverd (bestandsgrootte)
 - **Let op**: de volledige trainings-`time_series/` staat op Databricks in een Volume (zie `config.yml`) en zit niet in deze repository. Zie ook [`data/README.md`](data/README.md).
@@ -61,10 +63,10 @@ Het project werkt met 40 afvoergebieden van HDSR. De lijst staat in `data/hdsr_p
 
 Het project test verschillende LSTM configuraties:
 
-1. **MTSLSTM** — Multi-Timescale LSTM
-2. **MTSLSTM + Embedding** — met embedding layer voor categorische features
-3. **MTSLSTM + One-Hot Encoding** — met one-hot encoded features
-4. **Statische Multi-Timescale LSTM** — varianten met statische features
+1. **MTSLSTM**: Multi-Timescale LSTM
+2. **MTSLSTM + Embedding**: met embedding layer voor categorische features
+3. **MTSLSTM + One-Hot Encoding**: met one-hot encoded features
+4. **Statische Multi-Timescale LSTM**: varianten met statische features
 
 De configuratie van een run staat in `config.yml`. Voor experimenten maak je hiervan doorgaans varianten (bijv. per model/feature-set).
 
@@ -89,6 +91,8 @@ Er is geen `training.run_model` in deze repo; training loopt via upstream Neural
 |-----------------|--------------|
 | `preprocessing.create_timeseries_files` | Bouwt `data_ens/time_series/<SHAPE_ID>.nc` met 30 HARMONIE-leden |
 | `jobs/preprocess_ensembles.py` | Zelfde voor alle polders (`PREPROCESSING_DAYS`, default 365) |
+| `preprocessing.smooth_discharge` | Gemeten afvoer (`data/raw_discharge_data/`) smoothen en plotten |
+| `preprocessing.peil_variability` | Variabiliteit van het streefpeil per polder (eenmalige analyse, vereist `geopandas`) |
 
 ### Inference (operationeel)
 
@@ -105,6 +109,7 @@ Er is geen `training.run_model` in deze repo; training loopt via upstream Neural
 | `postprocessing.export_ensemble_table` | Kernlogica voor postprocess-job |
 | `analysis.plot_ensemble_forecast` | Plots uit `polders_hdsr_1h.nc` → `inference_runs/plots/` |
 | `viz.qqplots`, `viz.nse_map` | Evaluatie na training |
+| `viz.visualize_hydrograph` | Dash-app voor uurlijkse hydrografen uit geëvalueerde NetCDF's (paden bovenaan het script aanpassen) |
 
 `analysis.map_hdsr` is een interactief notebook-achtig script (ipywidgets), geen batch-CLI.
 
@@ -160,9 +165,9 @@ Eén bestand op repo-root: `cp .env.example .env`. Paden worden opgelost via `ne
 | `KNMI_API_KEY` | verplicht (preprocessing) | verplicht |
 | `ENSEMBLE_STARTTIME` | optioneel; `YYYYMMDDHH` UTC | optioneel; oudste run in 6-uurs venster |
 | `DOWNLOAD_ENSEMBLE` | `1` of `0` (cache `data_ens/_tmp_harmonie/`) | `1` of `0` |
-| `PREPROCESSING_DAYS` | — | optioneel; default `365` in `jobs/preprocess_ensembles.py` |
+| `PREPROCESSING_DAYS` | – | optioneel; default `365` in `jobs/preprocess_ensembles.py` |
 | `LOG_LEVEL` | optioneel; default `INFO` | optioneel |
-| `ENSEMBLE_FORECAST_TABLE` | — | verplicht voor postprocess; `catalog.schema.table` |
+| `ENSEMBLE_FORECAST_TABLE` | – | verplicht voor postprocess; `catalog.schema.table` |
 
 Zie ook inline uitleg in [`.env.example`](.env.example).
 
@@ -172,7 +177,7 @@ Zie ook inline uitleg in [`.env.example`](.env.example).
 pip install -e .
 cp .env.example .env
 python -m neural_hydrology.preprocessing.create_timeseries_files --days 30 --basin-id AFVG1
-python -m neural_hydrology.training.run_model
+python -m neuralhydrology.nh_run train --config-file config.yml
 ```
 
 **Databricks**
@@ -252,7 +257,7 @@ Deze branch is bedoeld om het NeuralHydrology-framework te draaien op Databricks
 - **Run starten** (na `pip install -e .` in de Git folder):
 
 ```bash
-python -m neural_hydrology.training.run_model
+python -m neuralhydrology.nh_run train --config-file config.yml
 ```
 
 #### Hyperparameter optimalisatie (Optuna + MLflow)
@@ -265,7 +270,7 @@ python -m neural_hydrology.training.hyperparameter_optimalisatie
 - **Belangrijke instellingen in het script**:
   - `BASE_CONFIG`: pad naar de basis `config.yml` die per trial wordt aangepast.
   - `OUTPUT_DIR` en `RUNS_DIR`: outputlocaties op een Volume (standaard onder `/Volumes/dbw_datascience_tst_weu_001/default/data_neuralhydrology/output`).
-  - `N_TRIALS`: aantal Optuna trials.
+  - `N_TRIALS`: aantal Optuna trials (standaard 50).
 - **Wat er gebeurt**:
   - Per trial wordt een eigen config geschreven en als MLflow artifact gelogd.
   - NeuralHydrology wordt gestart via `run_neural_hydrology_model(config_path)`.
@@ -287,7 +292,7 @@ python -m neural_hydrology.training.batch_train_model
   - `EXPERIMENT_NAME`: naam van de HPO-experimentmap onder `.../output/HPO/`.
   - `TRIAL_NAME`: de trial-map die je wilt hertrainen, bijvoorbeeld `trial_28`.
   - `PATH_HPO`: pad naar de HPO-output waarin de gekozen trial staat.
-  - `NUMBER_OF_RETRAININGS`: aantal keer dat het model opnieuw wordt getraind (met verschillende seeds).
+  - `NUMBER_OF_RETRAININGS`: aantal keer dat het model opnieuw wordt getraind (met verschillende seeds; standaard 10).
   - `RETRAIN_BASE_DIR` en `DESTINATION_DIR`: outputlocaties voor de gekopieerde run en de nieuwe retrains.
   - `EVAL_OUTPUT_DIR`: map waarin evaluatieresultaten (NetCDFs) worden weggeschreven.
 - **Wat er gebeurt**:
@@ -325,15 +330,17 @@ Databricks: (1) ensemble-tijdreeksen, (2) inference met bagging, (3) Unity Catal
 
 #### 1) Preprocessing: ensemble tijdreeksen bouwen
 
-- Het module `neural_hydrology.preprocessing.create_timeseries_files` bouwt per afvoergebied (`SHAPE_ID`) één NetCDF in `data_ens/time_series/<SHAPE_ID>.nc` met **30 ensembleleden** per variabele (`neerslag_1` … `neerslag_30`, idem voor `temperatuur`, `u`, `v`, `straling`, `streefpeil`).
+- Het module `neural_hydrology.preprocessing.create_timeseries_files` bouwt per afvoergebied (`SHAPE_ID`) één NetCDF in `data_ens/time_series/<SHAPE_ID>.nc` met **30 ensembleleden** per variabele (`neerslag_1` … `neerslag_30`, idem voor `temperatuur`, `u`, `v`, `straling`, `verdamping`, `streefpeil`).
 
-- **Streefpeil** — constant over de volledige `date`-as: laatste niet-NaN waarde uit `DATA_DIR/time_series/<SHAPE_ID>.nc` (training), identiek in `streefpeil_1` … `streefpeil_30` (`units`: `mNAP`).
+- **Verdamping**: KNMI-daggegevens EV24 (Makkink, station 348 Cabauw), omgerekend van 0,1 mm/dag naar mm/uur. Gaten tot `VERDAMPING_INTERP_LIMIT_HOURS` (72 uur) worden lineair geïnterpoleerd, daarna worden de laatste waarden doorgetrokken. Over de forecastperiode blijft de laatst bekende waarde gelden, voor alle leden gelijk (`units`: `mm`).
+
+- **Streefpeil**: constant over de volledige `date`-as: laatste niet-NaN waarde uit `DATA_DIR/time_series/<SHAPE_ID>.nc` (training), identiek in `streefpeil_1` … `streefpeil_30` (`units`: `mNAP`).
 
 ##### Bronnen en volgorde
 
-1. **Historisch meteo (Cabauw)** — KNMI **klimatologie uurgegevens** (station 348 Cabauw) + waar nodig aanvulling uit KNMI Open Data **10-minuut** stationdata: temperatuur, zonnestraling, wind als `u`/`v`.
-2. **Historisch neerslag** — KNMI **MFBS** (radar, uur) gecombineerd met **RTCOR** (5-min → **uursom (mm)** per gebied; aggregatie met minimum-aantal 5-min stappen).
-3. **Forecast** — KNMI Open Data **HARMONIE CY43**: composiet uit **twee datasets** (`harmonie_arome_cy43_p2a` meteo + `harmonie_arome_cy43_p2b` renew/straling), tot **30 leden** over een rollend 6-uurs venster (`ENSEMBLE_STARTTIME` in `.env` op repo-root).
+1. **Historisch meteo (Cabauw)**: KNMI **klimatologie uurgegevens** (station 348 Cabauw) + waar nodig aanvulling uit KNMI Open Data **10-minuut** stationdata: temperatuur, zonnestraling, wind als `u`/`v`. De verdamping komt uit de KNMI-**daggegevens** (EV24).
+2. **Historisch neerslag**: KNMI **MFBS** (radar, uur) gecombineerd met **RTCOR** (5-min → **uursom (mm)** per gebied; aggregatie met minimum-aantal 5-min stappen).
+3. **Forecast**: KNMI Open Data **HARMONIE CY43**: composiet uit **twee datasets** (`harmonie_arome_cy43_p2a` meteo + `harmonie_arome_cy43_p2b` renew/straling), tot **30 leden** over een rollend 6-uurs venster (`ENSEMBLE_STARTTIME` in `.env` op repo-root).
 
 ##### KNMI in `.env`
 
@@ -341,14 +348,21 @@ Databricks: (1) ensemble-tijdreeksen, (2) inference met bagging, (3) Unity Catal
 
 ##### Gedrag bij ontbrekende waarden (na merge historisch + forecast)
 
+- **Verdamping**: zie hierboven; de interpolatielimiet is `VERDAMPING_INTERP_LIMIT_HOURS`. Is de EV24-reeks helemaal leeg, dan stopt het script met een foutmelding.
 - **Temperatuur, straling, wind (`u`,`v`)**: korte **lineaire interpolatie** langs de tijd; maximum gap wordt bepaald door `**METEO_INTERP_LIMIT_HOURS`** in `create_timeseries_files.py`.
 - **Neerslag**: resterende **NaN → 0** (neerslag is een **uursom per tijdstap**, dus in de praktijk **mm per uurstap**; in de NetCDF staat het `units`-attribuut momenteel als `"mm"`). Dit gedrag is aan/uit via `MissingDataConfig.neerslag_fill_nan_with_zero`.
 
 ##### Overige instellingen in het script
 
-- `**RTCOR_MAX_DOWNLOADS`** — maximum aantal RTCOR-bestandsdownloads per run (bescherming tegen te lange KNMI-pulls).
+- `**RTCOR_MAX_DOWNLOADS`**: maximum aantal RTCOR-bestandsdownloads per run (bescherming tegen te lange KNMI-pulls).
+
+##### Uitvoerlocatie
+
+Op Databricks schrijft het script de NetCDF's eerst naar `/local_disk0/neural_hydrology/data_ens/time_series/` (een Volume ondersteunt geen POSIX-schrijfacties) en kopieert ze daarna naar `DATA_ENS_DIR/time_series/`. Bestaat `/local_disk0` niet, zoals lokaal, dan schrijft het script direct naar `DATA_ENS_DIR/time_series/` en vervalt de kopieerstap.
 
 ##### Uitvoeren
+
+De default van `--days` is 370; `jobs/preprocess_ensembles.py` gebruikt 365 (`PREPROCESSING_DAYS`).
 
 ```bash
 python -m neural_hydrology.preprocessing.create_timeseries_files --days 365
@@ -360,6 +374,7 @@ python -m neural_hydrology.preprocessing.create_timeseries_files --days 30 --bas
 ```mermaid
 flowchart TD
   subgraph knmi_hist [KNMI historisch]
+    knmi_ev24[KNMI daggegevens EV24 Cabauw STN348]
     knmi_uur[KNMI klimatologie uurgegevens Cabauw STN348]
     knmi_10m[KNMI Open Data 10-min station waar nodig]
     knmi_mfbs[KNMI Open Data MFBS radar uur]
@@ -375,6 +390,9 @@ flowchart TD
   knmi_10m --> cabauw
   cabauw --> histMeteo[Hist meteo DataFrame]
 
+  knmi_ev24 --> ev24[EV24 loader]
+  ev24 --> histVerdamping[Hist verdamping uurreeks]
+
   knmi_mfbs --> radar[Radar MFBS plus RTCOR loader]
   knmi_rtcor --> radar
   radar --> histPrec[Hist neerslag per gebied]
@@ -385,13 +403,14 @@ flowchart TD
 
   histMeteo --> orchestrator["create_timeseries_files.py"]
   histPrec --> orchestrator
+  histVerdamping --> orchestrator
   fcEns --> orchestrator
   orchestrator --> basinNc["data_ens/time_series SHAPE_ID.nc"]
 ```
 
 #### 2) Inference: ensemble met getrainde modellen
 
-**Operationeel:** `jobs/run_ensembles.py` — vijf runs (`BEST_MODEL_DIR_1` … `_5`), mediaan per HARMONIE-lid, output in `INFERENCE_RUNS_DIR/`.
+**Operationeel:** `jobs/run_ensembles.py`: vijf runs (`BEST_MODEL_DIR_1` … `_5`), mediaan per HARMONIE-lid, output in `INFERENCE_RUNS_DIR/`.
 
 **Operationele job (`jobs/run_ensembles.py`)** draait inference met **vijf** getrainde runs (`BEST_MODEL_DIR_1` … `BEST_MODEL_DIR_5` in `.env`). Per HARMONIE-ensemblelid wordt de **mediaan** over de vijf modelvoorspellingen genomen (model-bagging). Output: één NetCDF-set in `INFERENCE_RUNS_DIR/`, compatibel met postprocess en Power BI.
 
@@ -459,8 +478,10 @@ Training: `runs/` (gitignored) met checkpoints, metrics, TensorBoard. Inference:
 
 ## Notebooks
 
-- `hyperparameter_importance.ipynb` — hyperparameter importance
-- `visualisatie_runs.ipynb` — vergelijking training runs
+- `hyperparameter_importance.ipynb`: hyperparameter importance
+- `visualisatie_runs.ipynb`: vergelijking training runs
+- `visualisatie_runs_databricks_app_sync_v2.ipynb` en `visualisatie_runs_databricks_app_zonder_uc_resource.ipynb`: exporteren de data voor de Dash-app in `app/` (zie [`app/README.md`](app/README.md))
+- `config_visualisatie_runs.yml`: configuratie voor de visualisatie-notebooks
 
 ## Licentie
 
